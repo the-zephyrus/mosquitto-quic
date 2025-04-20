@@ -1,0 +1,4 @@
+[submodule "quic/msquic"]
+	path = quic/msquic
+	url = https://github.com/microsoft/msquic.git
+	branch = main
