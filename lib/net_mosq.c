@@ -15,8 +15,9 @@ SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
 Contributors:
    Roger Light - initial implementation and documentation.
 */
-
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "config.h"
 
 #include <assert.h>
@@ -25,7 +26,9 @@ Contributors:
 #include <stdio.h>
 #include <string.h>
 #ifndef WIN32
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
@@ -77,6 +80,11 @@ Contributors:
 #include "time_mosq.h"
 #include "util_mosq.h"
 
+#ifdef WITH_QUIC
+#include "msquic_mosq.h"
+#endif
+
+#ifndef WITH_QUIC
 #ifdef WITH_TLS
 int tls_ex_index_mosq = -1;
 UI_METHOD *_ui_method = NULL;
@@ -1026,6 +1034,82 @@ ssize_t net__write(struct mosquitto *mosq, const void *buf, size_t count)
 }
 
 
+#ifndef WITH_BROKER
+void *mosquitto_ssl_get(struct mosquitto *mosq)
+{
+#ifdef WITH_TLS
+	return mosq->ssl;
+#else
+	UNUSED(mosq);
+
+	return NULL;
+#endif
+}
+#endif
+
+#else
+int net__init(const char *appname, QUIC_EXECUTION_PROFILE execution_profile)
+{
+	return msquic_init(appname, execution_profile);
+}
+
+void net__cleanup(void)
+{
+	msquic_cleanup();
+}
+
+int net__quic_connect(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address)
+{
+	if(!mosq || !host || port == 0) return MOSQ_ERR_INVAL;
+	
+	int rc;
+
+	rc = msquic_setup_client_configuration(mosq);
+	if (rc) return rc;
+
+	struct mosq_quic_connection *connection = &mosq->quic_connection;
+
+	return msquic_start_connection(connection, host, port, bind_address);
+}
+
+int net__quic_close_connection(struct mosquitto *mosq)
+{
+	if(!mosq) return MOSQ_ERR_INVAL;
+	struct mosq_quic_connection *connection = &mosq->quic_connection;
+
+	return msquic_shutdown_connection(connection);
+}
+
+void net__quic_close_configuration(struct mosquitto *mosq)
+{
+    msquic_close_client_configuration(mosq);
+}
+
+int net__write(const struct mosq_quic_stream *stream, const void *buf, uint32_t count, void* client_context)
+{
+	if(count == 0) return MOSQ_ERR_SUCCESS;
+	return msquic_send(stream, buf, count, client_context);
+}
+
+void net__loop_wakeup(struct mosquitto *mosq, enum mosq_err_t rc)
+{
+	if(!mosq) return;
+
+    signed char signal_byte = (signed char)rc;
+
+    if(mosq->sockpairW != INVALID_SOCKET){
+#ifndef WIN32
+        if(write(mosq->sockpairW, &signal_byte, 1) < 0){
+           
+        }
+#else
+        if(send(mosq->sockpairW, &signal_byte, 1, 0) == SOCKET_ERROR){
+        }
+#endif
+    }
+}
+#endif
+
 int net__socket_nonblock(mosq_sock_t *sock)
 {
 #ifndef WIN32
@@ -1053,7 +1137,6 @@ int net__socket_nonblock(mosq_sock_t *sock)
 #endif
 	return MOSQ_ERR_SUCCESS;
 }
-
 
 #ifndef WITH_BROKER
 int net__socketpair(mosq_sock_t *pairR, mosq_sock_t *pairW)
@@ -1182,19 +1265,6 @@ int net__socketpair(mosq_sock_t *pairR, mosq_sock_t *pairW)
 	*pairR = sv[0];
 	*pairW = sv[1];
 	return MOSQ_ERR_SUCCESS;
-#endif
-}
-#endif
-
-#ifndef WITH_BROKER
-void *mosquitto_ssl_get(struct mosquitto *mosq)
-{
-#ifdef WITH_TLS
-	return mosq->ssl;
-#else
-	UNUSED(mosq);
-
-	return NULL;
 #endif
 }
 #endif

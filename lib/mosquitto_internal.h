@@ -22,8 +22,12 @@ Contributors:
 
 #include "config.h"
 
+#ifdef WITH_QUIC
+#  include "msquic.h"
+#endif
+
 #ifdef WIN32
-#  include <winsock2.h>
+#    include <winsock2.h>
 #endif
 
 #ifdef WITH_TLS
@@ -35,8 +39,10 @@ Contributors:
 
 #include <pthread_compat.h>
 
-#ifdef WITH_SRV
-#  include <ares.h>
+#ifndef WITH_QUIC
+#  ifdef WITH_SRV
+#    include <ares.h>
+#  endif
 #endif
 
 #ifdef WIN32
@@ -62,11 +68,13 @@ Contributors:
 struct mosquitto_client_msg;
 #endif
 
+
 #ifdef WIN32
-typedef SOCKET mosq_sock_t;
+	typedef SOCKET mosq_sock_t;
 #else
-typedef int mosq_sock_t;
+	typedef int mosq_sock_t;
 #endif
+
 
 #define SAFE_PRINT(A) (A)?(A):"null"
 
@@ -112,6 +120,7 @@ enum mosquitto_client_state {
 	mosq_cs_disused = 19, /* client that has been added to the disused list to be freed */
 	mosq_cs_authenticating = 20, /* Client has sent CONNECT but is still undergoing extended authentication */
 	mosq_cs_reauthenticating = 21, /* Client is undergoing reauthentication and shouldn't do anything else until complete */
+	
 };
 
 enum mosquitto__protocol {
@@ -207,20 +216,61 @@ struct mosquitto_msg_data{
 	uint16_t inflight_maximum;
 };
 
+#ifdef WITH_QUIC
+
+#define PERF_DEFAULT_SEND_BUFFER_SIZE       0x20000
+
+struct mosq_quic_config {
+    HQUIC handle;
+    char *alpn;
+	bool insecure;
+};
+
+
+struct mosq_quic_stream {
+    HQUIC handle;
+    struct mosq_quic_connection *connection;
+    uint64_t bytes_outstanding;
+    uint64_t ideal_sendbuffer;
+};
+
+
+struct mosq_quic_connection_params{
+    uint8_t *resumption_ticket_data;
+    uint32_t resumption_ticket_length;
+    uint8_t use_resumption_ticket;         
+    uint8_t use_encryption;              
+    uint8_t use_pacing;                
+    uint8_t use_send_buffering;
+};
+
+struct mosq_quic_connection {
+	HQUIC handle;
+	struct mosquitto *client_ctx;
+    struct mosq_quic_stream *stream;
+};
+
+#endif
 
 struct mosquitto {
-#if defined(WITH_BROKER) && defined(WITH_EPOLL)
+#ifdef WITH_QUIC
+	struct mosq_quic_config quic_config;
+	struct mosq_quic_connection_params quic_connection_params;
+	struct mosq_quic_connection quic_connection;
+#else
+#  if defined(WITH_BROKER) && defined(WITH_EPOLL)
 	/* This *must* be the first element in the struct. */
 	int ident;
-#endif
+#  endif
 	mosq_sock_t sock;
-#ifndef WITH_BROKER
-	mosq_sock_t sockpairR, sockpairW;
-#endif
-	uint32_t maximum_packet_size;
-#if defined(__GLIBC__) && defined(WITH_ADNS)
+#  if defined(__GLIBC__) && defined(WITH_ADNS)
 	struct gaicb *adns; /* For getaddrinfo_a */
+#  endif
 #endif
+#  ifndef WITH_BROKER
+	mosq_sock_t sockpairR, sockpairW;
+#  endif
+	uint32_t maximum_packet_size;
 	enum mosquitto__protocol protocol;
 	char *address;
 	char *id;
@@ -242,12 +292,13 @@ struct mosquitto {
 	int out_packet_count;
 	uint32_t will_delay_interval;
 	time_t will_delay_time;
-#ifdef WITH_TLS
+
+#  ifdef WITH_TLS
 	SSL *ssl;
 	SSL_CTX *ssl_ctx;
-#ifndef WITH_BROKER
+#  ifndef WITH_BROKER
 	SSL_CTX *user_ssl_ctx;
-#endif
+#  endif
 	char *tls_cafile;
 	char *tls_capath;
 	char *tls_certfile;
@@ -266,8 +317,9 @@ struct mosquitto {
 	bool tls_ocsp_required;
 	bool tls_use_os_certs;
 	enum mosquitto__keyform tls_keyform;
-#endif
+#  endif
 	bool want_write;
+
 #if defined(WITH_THREADING) && !defined(WITH_BROKER)
 	pthread_mutex_t callback_mutex;
 	pthread_mutex_t log_callback_mutex;
@@ -294,13 +346,15 @@ struct mosquitto {
 	struct mosquitto__client_sub **subs;
 	char *auth_method;
 	int sub_count;
-#  ifndef WITH_EPOLL
+#  ifndef WITH_QUIC
+#    ifndef WITH_EPOLL
 	int pollfd_index;
-#  endif
-#  ifdef WITH_WEBSOCKETS
+#    endif
+#    ifdef WITH_WEBSOCKETS
 	struct lws *wsi;
-#  endif
+#    endif
 	bool ws_want_write;
+#  endif
 	bool assigned_id;
 #else
 #  ifdef WITH_SOCKS
@@ -339,6 +393,7 @@ struct mosquitto {
 	char threaded;
 	struct mosquitto__packet *out_packet_last;
 	mosquitto_property *connect_properties;
+
 #  ifdef WITH_SRV
 	ares_channel achan;
 #  endif
@@ -349,12 +404,16 @@ struct mosquitto {
 
 #ifdef WITH_BROKER
 	UT_hash_handle hh_id;
+#  ifndef WITH_QUIC
 	UT_hash_handle hh_sock;
+#  endif
 	struct mosquitto *for_free_next;
 	struct session_expiry_list *expiry_list_item;
 	uint16_t remote_port;
 #endif
+#ifndef WITH_QUIC
 	uint32_t events;
+#endif
 };
 
 #define STREMPTY(str) (str[0] == '\0')

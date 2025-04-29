@@ -19,6 +19,8 @@ Contributors:
 
 #include "mux.h"
 
+#ifndef WITH_QUIC
+
 int mux__init(struct mosquitto__listener_sock *listensock, int listensock_count)
 {
 #ifdef WITH_EPOLL
@@ -88,3 +90,5 @@ int mux__cleanup(void)
 	return mux_poll__cleanup();
 #endif
 }
+
+#endif

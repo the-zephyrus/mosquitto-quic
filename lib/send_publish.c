@@ -54,10 +54,14 @@ int send__publish(struct mosquitto *mosq, uint16_t mid, const char *topic, uint3
 #endif
 	assert(mosq);
 
-#if defined(WITH_BROKER) && defined(WITH_WEBSOCKETS)
-	if(mosq->sock == INVALID_SOCKET && !mosq->wsi) return MOSQ_ERR_NO_CONN;
+#ifdef WITH_QUIC
+	if(mosq->quic_connection.handle == NULL) return MOSQ_ERR_NO_CONN;
 #else
+#  if defined(WITH_BROKER) && defined(WITH_WEBSOCKETS)
+	if(mosq->sock == INVALID_SOCKET && !mosq->wsi) return MOSQ_ERR_NO_CONN;
+#  else
 	if(mosq->sock == INVALID_SOCKET) return MOSQ_ERR_NO_CONN;
+#  endif
 #endif
 
 	if(!mosq->retain_available){

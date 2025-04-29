@@ -15,6 +15,7 @@ SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
 Contributors:
    Roger Light - initial implementation and documentation.
 */
+#ifndef WITH_QUIC
 
 #include "config.h"
 
@@ -347,5 +348,7 @@ static void loop_handle_reads_writes(void)
 	}
 }
 
+
+#endif
 
 #endif

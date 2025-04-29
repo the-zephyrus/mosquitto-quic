@@ -1,8 +1,8 @@
 set(shared_src client_shared.c client_shared.h client_props.c)
 
-if (WITH_SRV)
+if (WITH_SRV AND NOT WITH_QUIC)
 	add_definitions("-DWITH_SRV")
-endif (WITH_SRV)
+endif ()
 
 set( CLIENT_INC ${mosquitto_SOURCE_DIR} ${mosquitto_SOURCE_DIR}/include
             ${STDBOOL_H_PATH} ${STDINT_H_PATH} ${PTHREAD_INCLUDE_DIR}
@@ -39,7 +39,7 @@ else()
 	target_link_libraries(mosquitto_rr libmosquitto)
 endif()
 
-if (QNX)
+if (QNX AND NOT WITH_QUIC)
     target_link_libraries(mosquitto_pub socket)
     target_link_libraries(mosquitto_sub socket)
     target_link_libraries(mosquitto_rr socket)

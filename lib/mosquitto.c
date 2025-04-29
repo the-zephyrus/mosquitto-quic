@@ -80,7 +80,11 @@ int mosquitto_lib_init(void)
 		srand(tv.tv_sec*1000 + tv.tv_usec/1000);
 #endif
 
+#ifndef WITH_QUIC
 		rc = net__init();
+#else
+		rc = net__init("mosquitto_client",  QUIC_EXECUTION_PROFILE_TYPE_REAL_TIME);
+#endif
 		if (rc != MOSQ_ERR_SUCCESS) {
 			return rc;
 		}
@@ -115,12 +119,19 @@ struct mosquitto *mosquitto_new(const char *id, bool clean_start, void *userdata
 
 	mosq = (struct mosquitto *)mosquitto__calloc(1, sizeof(struct mosquitto));
 	if(mosq){
+#ifdef WITH_QUIC
+		mosq->quic_connection.handle = NULL;
+		mosq->quic_connection.stream = NULL;
+#else
 		mosq->sock = INVALID_SOCKET;
+#endif
 #ifdef WITH_THREADING
 		mosq->thread_id = pthread_self();
 #endif
+#ifndef WITH_BROKER
 		mosq->sockpairR = INVALID_SOCKET;
 		mosq->sockpairW = INVALID_SOCKET;
+#endif
 		rc = mosquitto_reinitialise(mosq, id, clean_start, userdata);
 		if(rc){
 			mosquitto_destroy(mosq);
@@ -154,9 +165,22 @@ int mosquitto_reinitialise(struct mosquitto *mosq, const char *id, bool clean_st
 		mosq->userdata = mosq;
 	}
 	mosq->protocol = mosq_p_mqtt311;
+#ifdef WITH_QUIC
+	mosq->quic_connection.handle = NULL;
+	mosq->quic_connection.client_ctx = mosq;
+	mosq->quic_connection.stream = NULL;
+	mosq->quic_connection_params.use_resumption_ticket = 0;
+	mosq->quic_connection_params.use_encryption = 1;
+	mosq->quic_connection_params.use_pacing = 1;
+	mosq->quic_connection_params.use_send_buffering = 0;
+#else
 	mosq->sock = INVALID_SOCKET;
+#endif
+
+#ifndef WITH_BROKER
 	mosq->sockpairR = INVALID_SOCKET;
 	mosq->sockpairW = INVALID_SOCKET;
+#endif
 	mosq->keepalive = 60;
 	mosq->clean_start = clean_start;
 	if(id){
@@ -199,7 +223,8 @@ int mosquitto_reinitialise(struct mosquitto *mosq, const char *id, bool clean_st
 	mosq->reconnect_delay_max = 1;
 	mosq->reconnect_exponential_backoff = false;
 	mosq->threaded = mosq_ts_none;
-#ifdef WITH_TLS
+#ifndef WITH_QUIC
+  #ifdef WITH_TLS
 	mosq->ssl = NULL;
 	mosq->ssl_ctx = NULL;
 	mosq->ssl_ctx_defaults = true;
@@ -207,6 +232,7 @@ int mosquitto_reinitialise(struct mosquitto *mosq, const char *id, bool clean_st
 	mosq->tls_insecure = false;
 	mosq->want_write = false;
 	mosq->tls_ocsp_required = false;
+  #endif
 #endif
 #ifdef WITH_THREADING
 	pthread_mutex_init(&mosq->callback_mutex, NULL);
@@ -222,10 +248,12 @@ int mosquitto_reinitialise(struct mosquitto *mosq, const char *id, bool clean_st
 #endif
 	/* This must be after pthread_mutex_init(), otherwise the log mutex may be
 	 * used before being initialised. */
+#ifndef WITH_BROKER
 	if(net__socketpair(&mosq->sockpairR, &mosq->sockpairW)){
 		log__printf(mosq, MOSQ_LOG_WARNING,
 				"Warning: Unable to open socket pair, outgoing publish commands may be delayed.");
 	}
+#endif
 
 	return MOSQ_ERR_SUCCESS;
 }
@@ -259,12 +287,33 @@ void mosquitto__destroy(struct mosquitto *mosq)
 		pthread_mutex_destroy(&mosq->mid_mutex);
 	}
 #endif
+
+#ifdef WITH_QUIC
+	if(mosq->quic_connection.handle){
+		net__quic_close_connection(mosq);
+	}
+
+	if(mosq->quic_connection_params.use_resumption_ticket){
+		mosquitto__free(mosq->quic_connection_params.resumption_ticket_data);
+		mosq->quic_connection_params.resumption_ticket_data = NULL;
+		mosq->quic_connection_params.resumption_ticket_length = 0;
+		mosq->quic_connection_params.use_resumption_ticket = 0;
+	}
+
+	if(mosq->quic_config.handle){
+		net__quic_close_configuration(mosq);
+		mosquitto__free(mosq->quic_config.alpn);
+		mosq->quic_config.alpn = NULL;
+	}
+#else
 	if(mosq->sock != INVALID_SOCKET){
 		net__socket_close(mosq);
 	}
+#endif
 	message__cleanup_all(mosq);
 	will__clear(mosq);
-#ifdef WITH_TLS
+#ifndef WITH_QUIC
+#  ifdef WITH_TLS
 	if(mosq->ssl){
 		SSL_free(mosq->ssl);
 	}
@@ -281,6 +330,7 @@ void mosquitto__destroy(struct mosquitto *mosq)
 	mosquitto__free(mosq->tls_psk);
 	mosquitto__free(mosq->tls_psk_identity);
 	mosquitto__free(mosq->tls_alpn);
+#  endif
 #endif
 
 	mosquitto__free(mosq->address);
@@ -306,6 +356,8 @@ void mosquitto__destroy(struct mosquitto *mosq)
 	packet__cleanup_all_no_locks(mosq);
 
 	packet__cleanup(&mosq->in_packet);
+
+#ifndef WITH_BROKER
 	if(mosq->sockpairR != INVALID_SOCKET){
 		COMPAT_CLOSE(mosq->sockpairR);
 		mosq->sockpairR = INVALID_SOCKET;
@@ -314,6 +366,7 @@ void mosquitto__destroy(struct mosquitto *mosq)
 		COMPAT_CLOSE(mosq->sockpairW);
 		mosq->sockpairW = INVALID_SOCKET;
 	}
+#endif
 }
 
 void mosquitto_destroy(struct mosquitto *mosq)
@@ -326,14 +379,23 @@ void mosquitto_destroy(struct mosquitto *mosq)
 
 int mosquitto_socket(struct mosquitto *mosq)
 {
+#ifndef WITH_QUIC
 	if(!mosq) return INVALID_SOCKET;
 	return mosq->sock;
+#else
+	UNUSED(mosq);
+	return MOSQ_ERR_NOT_SUPPORTED;
+#endif
 }
 
 
 bool mosquitto_want_write(struct mosquitto *mosq)
 {
+#ifndef WITH_QUIC
 	return mosq->out_packet || mosq->current_out_packet || mosq->want_write;
+#else
+	return mosq->out_packet || mosq->current_out_packet;
+#endif
 }
 
 
@@ -392,6 +454,7 @@ int mosquitto_sub_topic_tokenise(const char *subtopic, char ***topics, int *coun
 
 	return MOSQ_ERR_SUCCESS;
 }
+
 
 int mosquitto_sub_topic_tokens_free(char ***topics, int count)
 {

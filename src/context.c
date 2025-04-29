@@ -149,8 +149,11 @@ void context__cleanup(struct mosquitto *context, bool force_free)
 
 	mosquitto__free(context->password);
 	context->password = NULL;
-
+#ifdef WITH_QUIC
+	net__quic_close(context);
+#else
 	net__socket_close(context);
+#endif
 	if(force_free){
 		sub__clean_session(context);
 	}
@@ -221,7 +224,13 @@ void context__disconnect(struct mosquitto *context)
 	plugin__handle_disconnect(context, -1);
 
 	context__send_will(context);
+
+#ifdef WITH_QUIC
+	net__quic_close(context);
+#else
 	net__socket_close(context);
+#endif
+
 #ifdef WITH_BRIDGE
 	if(context->bridge == NULL)
 	/* Outgoing bridge connection never expire */

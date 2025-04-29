@@ -1,7 +1,7 @@
 option(WITH_LIB_CPP "Build C++ library?" ON)
-if (WITH_LIB_CPP)
+if (WITH_LIB_CPP AND NOT WITH_QUIC)
 	add_subdirectory(cpp)
-endif (WITH_LIB_CPP)
+endif ()
 
 include_directories(${mosquitto_SOURCE_DIR} ${mosquitto_SOURCE_DIR}/lib
 			${OPENSSL_INCLUDE_DIR} # Required for cross compilation
@@ -34,6 +34,7 @@ set(C_SRC
 	memory_mosq.c memory_mosq.h
 	messages_mosq.c messages_mosq.h
 	misc_mosq.c misc_mosq.h
+	msquic_mosq.c msquic_mosq.h
 	mosquitto.c ../include/mosquitto.h
 	mosquitto_internal.h
 	../include/mqtt_protocol.h
@@ -73,7 +74,11 @@ if (WIN32)
 	set (LIBRARIES ${LIBRARIES} ws2_32)
 endif (WIN32)
 
-if (WITH_SRV)
+if(WITH_QUIC)
+	set(LIBRARIES ${LIBRARIES} inc warnings msquic base_link)
+endif()
+
+if (WITH_SRV AND NOT WITH_QUIC)
 	# Simple detect c-ares
 	find_path(ARES_HEADER ares.h)
 	if (ARES_HEADER)
@@ -82,7 +87,7 @@ if (WITH_SRV)
 	else (ARES_HEADER)
 		message(WARNING "c-ares library not found.")
 	endif (ARES_HEADER)
-endif (WITH_SRV)
+endif ()
 
 add_library(libmosquitto SHARED ${C_SRC})
 set_target_properties(libmosquitto PROPERTIES
@@ -91,7 +96,7 @@ set_target_properties(libmosquitto PROPERTIES
 
 target_link_libraries(libmosquitto PRIVATE ${LIBRARIES})
 
-if (WITH_THREADING)
+if (WITH_THREADING OR WITH_QUIC)
 	if(WIN32)
 		 target_link_libraries(libmosquitto PRIVATE PThreads4W::PThreads4W)
 	else()
