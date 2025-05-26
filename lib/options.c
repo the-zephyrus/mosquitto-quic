@@ -40,6 +40,7 @@ Contributors:
 #include "memory_mosq.h"
 #include "misc_mosq.h"
 #include "mqtt_protocol.h"
+#include "msquic_mosq_helper.h"
 #include "util_mosq.h"
 #include "will_mosq.h"
 
@@ -370,24 +371,60 @@ int mosquitto_string_option(struct mosquitto *mosq, enum mosq_opt_t option, cons
 			}else{
 				return MOSQ_ERR_SUCCESS;
 			}
+			break;
 		
+		case MOSQ_OPT_QUIC_ALPN:
 #ifdef WITH_QUIC
-			case MOSQ_OPT_QUIC_ALPN:
-				mosquitto__free(mosq->quic_config.alpn);
-				if(value) {
-					mosq->quic_config.alpn = mosquitto__strdup(value);
-					if(mosq->quic_config.alpn) {
-						return MOSQ_ERR_SUCCESS;
-					}else{
-						return MOSQ_ERR_NOMEM;
-					}
-				} else {
-					return MOSQ_ERR_SUCCESS; 
+			mosquitto__free(mosq->quic_alpn);
+			if(value) {
+				mosq->quic_alpn = mosquitto__strdup(value);
+				if(mosq->quic_alpn) {
+					return MOSQ_ERR_SUCCESS;
+				}else{
+					return MOSQ_ERR_NOMEM;
 				}
+			} else {
+				return MOSQ_ERR_SUCCESS; 
+			}
 #else
-				return MOSQ_ERR_NOT_SUPPORTED;
+			return MOSQ_ERR_NOT_SUPPORTED;
 #endif
-				break;
+			break;
+
+		case MOSQ_OPT_QUIC_RESUMPTION_TICKET:
+#ifdef WITH_QUIC
+            mosquitto__free(mosq->quic_resumption_ticket);
+            if(value) {
+                size_t hex_len = strlen(value);
+                if(hex_len % 2 != 0) {
+                    return MOSQ_ERR_INVAL;
+                }
+                
+                uint32_t ticket_len = hex_len / 2;
+                
+                mosq->quic_resumption_ticket = (QUIC_BUFFER*)mosquitto__malloc(
+                    sizeof(QUIC_BUFFER) + ticket_len);
+                
+                if(mosq->quic_resumption_ticket) {
+                    mosq->quic_resumption_ticket->Buffer = (uint8_t*)(mosq->quic_resumption_ticket + 1);
+
+                    uint32_t decoded_len = decode_hex_buffer(value, ticket_len, mosq->quic_resumption_ticket->Buffer);
+                    if(decoded_len == 0) {
+                        mosquitto__free(mosq->quic_resumption_ticket);
+                        mosq->quic_resumption_ticket = NULL;
+                        return MOSQ_ERR_INVAL;
+                    }
+                    mosq->quic_resumption_ticket->Length = decoded_len;
+                } else {
+                    return MOSQ_ERR_NOMEM;
+                }
+            }
+
+            return MOSQ_ERR_SUCCESS;
+#else
+			return MOSQ_ERR_NOT_SUPPORTED;
+#endif
+			break;
 
 		default:
 			return MOSQ_ERR_INVAL;
@@ -526,7 +563,17 @@ int mosquitto_int_option(struct mosquitto *mosq, enum mosq_opt_t option, int val
 
 		case MOSQ_OPT_TCP_NODELAY:
 			mosq->tcp_nodelay = (bool)value;
-			break;	
+			break;
+        case MOSQ_OPT_QUIC_SEND_BUFFERING:
+#ifdef WITH_QUIC
+            if(value < 0 || value > UINT8_MAX){
+                return MOSQ_ERR_INVAL;
+            }
+            mosq->quic_use_send_buffering = (uint8_t)value;
+            break;
+#else
+			return MOSQ_ERR_NOT_SUPPORTED;
+#endif
 		default:
 			return MOSQ_ERR_INVAL;
 	}
@@ -568,139 +615,53 @@ void mosquitto_user_data_set(struct mosquitto *mosq, void *userdata)
 	}
 }
 
-
 void *mosquitto_userdata(struct mosquitto *mosq)
 {
 	return mosq->userdata;
+}
+
+int mosquitto_quic_regconfig_set(struct mosquitto *mosq, const char *app_name, int execution_profile_value)
+{
+#ifdef WITH_QUIC
+    if(!mosq) return MOSQ_ERR_INVAL;
+
+    // 验证 execution_profile_value 是否在 QUIC_EXECUTION_PROFILE 枚举的有效范围内
+    if (execution_profile_value < QUIC_EXECUTION_PROFILE_LOW_LATENCY ||
+        execution_profile_value > QUIC_EXECUTION_PROFILE_TYPE_REAL_TIME) { // 假设 REAL_TIME 是最大值
+        return MOSQ_ERR_INVAL;
+    }
+
+    mosquitto__free(mosq->quic_app_name);
+    if(app_name) {
+        mosq->quic_app_name = mosquitto__strdup(app_name);
+        if(!mosq->quic_app_name) {
+            return MOSQ_ERR_NOMEM;
+        }
+    } else {
+        mosq->quic_app_name = NULL;
+    }
+
+    mosq->quic_execution_profile = (QUIC_EXECUTION_PROFILE)execution_profile_value;
+
+    return MOSQ_ERR_SUCCESS;
+#else
+    UNUSED(mosq);
+    UNUSED(app_name);
+    UNUSED(execution_profile_value);
+    return MOSQ_ERR_NOT_SUPPORTED;
+#endif
 }
     
 int mosquitto_quic_insecure_set(struct mosquitto *mosq, bool value)
 {
 #ifdef WITH_QUIC
 	if(!mosq) return MOSQ_ERR_INVAL;
-	mosq->quic_config.insecure = value;
+	mosq->quic_insecure = value;
 	return MOSQ_ERR_SUCCESS;
 #else
 	UNUSED(mosq);
 	UNUSED(value);
 
 	return MOSQ_ERR_NOT_SUPPORTED;
-#endif
-}
-
-#ifdef WITH_QUIC
-static uint8_t hex_to_byte(char c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'A' && c <= 'F') return 10 + c - 'A';
-    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
-    return 0;
-}
-#endif
-
-
-int mosquitto_quic_resumption_ticket_set(struct mosquitto *mosq, const char *ticket)
-{
-	if (!mosq || !ticket) {
-        return MOSQ_ERR_INVAL;
-    }
-
-#ifdef WITH_QUIC
-
-    size_t ticket_hex_len = strlen(ticket);
-    if (ticket_hex_len == 0 || ticket_hex_len % 2 != 0) {
-        return MOSQ_ERR_INVAL;
-    }
-    
-    uint32_t ticket_bin_len = ticket_hex_len / 2;
-    uint8_t *ticket_bin = mosquitto__calloc(1, ticket_bin_len);
-    if (!ticket_bin) {
-        return MOSQ_ERR_NOMEM;
-    }
-    
-    for (uint32_t i = 0; i < ticket_bin_len; i++) {
-        char high = ticket[i * 2];
-        char low = ticket[i * 2 + 1];
-        
-        if (!isxdigit(high) || !isxdigit(low)) {
-            mosquitto__free(ticket_bin);
-            return MOSQ_ERR_INVAL;
-        }
-        
-        ticket_bin[i] = (hex_to_byte(high) << 4) | hex_to_byte(low);
-    }
-    
-    mosquitto__free(mosq->quic_connection_params.resumption_ticket_data);
-    
-    mosq->quic_connection_params.resumption_ticket_data = ticket_bin;
-    mosq->quic_connection_params.resumption_ticket_length = ticket_bin_len;
-    mosq->quic_connection_params.use_resumption_ticket = 1;
-    
-    return MOSQ_ERR_SUCCESS;
-#else
-    return MOSQ_ERR_NOT_SUPPORTED;
-#endif
-}
-
-
-int mosquitto_quic_resumption_ticket_raw_set(struct mosquitto *mosq, const uint8_t *ticket, uint32_t ticket_len)
-{
-	if (!mosq || !ticket || ticket_len == 0) {
-		return MOSQ_ERR_INVAL;
-	}
-#ifdef WITH_QUIC
-    
-    uint8_t *new_ticket = mosquitto__malloc(ticket_len);
-    if (!new_ticket) {
-        return MOSQ_ERR_NOMEM;
-    }
-    
-    memcpy(new_ticket, ticket, ticket_len);
-
-	mosquitto__free(mosq->quic_connection_params.resumption_ticket_data);
-    
-    mosq->quic_connection_params.resumption_ticket_data = new_ticket;
-    mosq->quic_connection_params.resumption_ticket_length = ticket_len;
-    mosq->quic_connection_params.use_resumption_ticket = 1;
-    
-    return MOSQ_ERR_SUCCESS;
-#else
-    return MOSQ_ERR_NOT_SUPPORTED;
-#endif
-}
-
-int mosquitto_quic_encryption_set(struct mosquitto *mosq, uint8_t value)
-{
-    if (!mosq) return MOSQ_ERR_INVAL;
-
-#ifdef WITH_QUIC
-    mosq->quic_connection_params.use_encryption = value;
-    return MOSQ_ERR_SUCCESS;
-#else
-    return MOSQ_ERR_NOT_SUPPORTED;
-#endif
-}
-
-int mosquitto_quic_pacing_set(struct mosquitto *mosq, uint8_t value)
-{
-    if (!mosq) return MOSQ_ERR_INVAL;
-
-#ifdef WITH_QUIC
-    mosq->quic_connection_params.use_pacing = value;
-    return MOSQ_ERR_SUCCESS;
-#else
-    return MOSQ_ERR_NOT_SUPPORTED;
-#endif
-}
-
-int mosquitto_quic_send_buffering_set(struct mosquitto *mosq, uint8_t value)
-{
-    if (!mosq) return MOSQ_ERR_INVAL;
-
-#ifdef WITH_QUIC
-    mosq->quic_connection_params.use_send_buffering = value;
-    return MOSQ_ERR_SUCCESS;
-#else
-    return MOSQ_ERR_NOT_SUPPORTED;
 #endif
 }

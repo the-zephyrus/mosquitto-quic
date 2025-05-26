@@ -1,0 +1,83 @@
+{
+    "version": 8,
+    "configurePresets": [
+        {
+            "name": "gcc-no-quic-debug",
+            "displayName": "GCC No-QUIC Debug (13.3.0 x86_64-linux-gnu)",
+            "description": "正在使用编译器: C = /usr/bin/gcc, CXX = /usr/bin/g++. QUIC: OFF, Build Type: Debug.",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "WITH_QUIC": "OFF"
+            }
+        },
+        {
+            "name": "gcc-no-quic-release",
+            "displayName": "GCC No-QUIC Release (13.3.0 x86_64-linux-gnu)",
+            "description": "正在使用编译器: C = /usr/bin/gcc, CXX = /usr/bin/g++. QUIC: OFF, Build Type: Release.",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+                "CMAKE_BUILD_TYPE": "Release",
+                "WITH_QUIC": "OFF"
+            }
+        },
+        {
+            "name": "gcc-with-quic-debug",
+            "displayName": "GCC With-QUIC Debug (13.3.0 x86_64-linux-gnu)",
+            "description": "正在使用编译器: C = /usr/bin/gcc, CXX = /usr/bin/g++. QUIC: ON, Build Type: Debug.",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "WITH_QUIC": "ON"
+            }
+        },
+        {
+            "name": "gcc-with-quic-release",
+            "displayName": "GCC With-QUIC Release (13.3.0 x86_64-linux-gnu)",
+            "description": "正在使用编译器: C = /usr/bin/gcc, CXX = /usr/bin/g++. QUIC: ON, Build Type: Release.",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+                "CMAKE_BUILD_TYPE": "Release",
+                "WITH_QUIC": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "no-quic-debug-default",
+            "displayName": "Build No-QUIC Debug",
+            "configurePreset": "gcc-no-quic-debug",
+            "description": "Build the default target using the GCC No-QUIC Debug configuration."
+        },
+        {
+            "name": "no-quic-release-default",
+            "displayName": "Build No-QUIC Release",
+            "configurePreset": "gcc-no-quic-release",
+            "description": "Build the default target using the GCC No-QUIC Release configuration."
+        },
+        {
+            "name": "with-quic-debug-default",
+            "displayName": "Build With-QUIC Debug",
+            "configurePreset": "gcc-with-quic-debug",
+            "description": "Build the default target using the GCC With-QUIC Debug configuration."
+        },
+        {
+            "name": "with-quic-release-default",
+            "displayName": "Build With-QUIC Release",
+            "configurePreset": "gcc-with-quic-release",
+            "description": "Build the default target using the GCC With-QUIC Release configuration."
+        }
+    ]
+}

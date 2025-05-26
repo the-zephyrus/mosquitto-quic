@@ -296,7 +296,7 @@ int packet__write(struct mosquitto *mosq)
 
 	if (!mosq) return MOSQ_ERR_INVAL;
 
-	if(mosq->quic_connection.handle == NULL) return MOSQ_ERR_NO_CONN;
+	if(!net__connection_valid(mosq)) return MOSQ_ERR_NO_CONN;
 
 	COMPAT_pthread_mutex_lock(&mosq->current_out_packet_mutex);
 	COMPAT_pthread_mutex_lock(&mosq->out_packet_mutex);
@@ -318,7 +318,7 @@ int packet__write(struct mosquitto *mosq)
 
 	struct mosq_quic_stream *stream = mosq->quic_connection.stream;
 
-	if(!stream || stream->handle == NULL) return MOSQ_ERR_QUIC_INVALID_STREAM;
+	if(!stream || stream->handle == NULL) return MOSQ_ERR_QUIC_NOT_INIT;
 
 	while(mosq->current_out_packet && stream->bytes_outstanding < stream->ideal_sendbuffer){
 		packet = mosq->current_out_packet;
@@ -500,6 +500,7 @@ int packet__read(struct mosq_quic_stream *stream, const uint8_t *buf, uint32_t b
         G_PUB_MSGS_RECEIVED_INC(1);
     }
 #endif
+	log__printf(mosq, MOSQ_LOG_DEBUG, "QUIC: Received packet, command=0x%02x", mosq->in_packet.command);
     rc = handle__packet(mosq);
 
     /* Free data and reset values */

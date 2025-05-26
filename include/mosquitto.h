@@ -123,10 +123,9 @@ enum mosq_err_t {
 	MOSQ_ERR_TOPIC_ALIAS_INVALID = 29,
 	MOSQ_ERR_ADMINISTRATIVE_ACTION = 30,
 	MOSQ_ERR_ALREADY_EXISTS = 31,
-	MOSQ_ERR_QUIC_API = 32,
-	MOSQ_ERR_QUIC_UNINITIALIZED = 33,
+	MOSQ_ERR_QUIC_NOT_INIT = 32,
+	MOSQ_ERR_QUIC_API = 33,
 	MOSQ_ERR_QUIC_HANDSHAKE = 34,
-	MOSQ_ERR_QUIC_INVALID_STREAM = 35,
 };
 
 /* Enum: mosq_opt_t
@@ -150,15 +149,8 @@ enum mosq_opt_t {
 	MOSQ_OPT_BIND_ADDRESS = 12,
 	MOSQ_OPT_TLS_USE_OS_CERTS = 13,
 	MOSQ_OPT_QUIC_ALPN = 14,
-	MOSQ_OPT_QUIC_SEND_BUFFERING_ENABLED = 15,
-    MOSQ_OPT_QUIC_DATAGRAM_RECEIVE_ENABLED = 16,
-    MOSQ_OPT_QUIC_PEER_BIDI_STREAM_COUNT = 17,
-    MOSQ_OPT_QUIC_PEER_UNIDI_STREAM_COUNT = 18,
-    MOSQ_OPT_QUIC_CONGESTION_ALGORITHM = 19,
-    MOSQ_OPT_QUIC_IDLE_TIMEOUT_MS = 20,
-    MOSQ_OPT_QUIC_HANDSHAKE_IDLE_TIMEOUT_MS = 21,
-    MOSQ_OPT_QUIC_DISCONNECT_TIMEOUT_MS = 22,
-    MOSQ_OPT_QUIC_KEEP_ALIVE_INTERVAL_MS = 23,
+	MOSQ_OPT_QUIC_RESUMPTION_TICKET = 15,
+	MOSQ_OPT_QUIC_SEND_BUFFERING = 16,
 };
 
 
@@ -1587,6 +1579,10 @@ libmosq_EXPORT int mosquitto_opts_set(struct mosquitto *mosq, enum mosq_opt_t op
  *	MOSQ_OPT_TLS_USE_OS_CERTS - Set to 1 to instruct the client to load and
  *	          trust OS provided CA certificates for use with TLS connections.
  *	          Set to 0 (the default) to only use manually specified CA certs.
+ *
+ *  MOSQ_OPT_QUIC_SEND_BUFFERING - Set to 1 to enable send buffering for QUIC
+ *            connections, 0 to disable. Defaults to 0 (disabled).
+ *            This option is only effective if QUIC support is compiled in.
  */
 libmosq_EXPORT int mosquitto_int_option(struct mosquitto *mosq, enum mosq_opt_t option, int value);
 
@@ -1628,6 +1624,20 @@ libmosq_EXPORT int mosquitto_int_option(struct mosquitto *mosq, enum mosq_opt_t 
  *
  *	MOSQ_OPT_BIND_ADDRESS - Set the hostname or ip address of the local network
  *	          interface to bind to when connecting.
+ *
+ *  MOSQ_OPT_QUIC_ALPN - Set the Application-Layer Protocol Negotiation (ALPN)
+ *            string for QUIC connections. This is typically "mqtt".
+ *            Must be set before <mosquitto_connect>.
+ *            This option is only effective if QUIC support is compiled in.
+ *
+ *  MOSQ_OPT_QUIC_RESUMPTION_TICKET - Set the QUIC resumption ticket as a
+ *            hex-encoded string. This ticket can be used by the client to
+ *            resume a previous QUIC session with the server, reducing
+ *            connection latency. The ticket is typically obtained from the
+ *            server during a previous connection (via the connect callback
+ *            or a specific event if the underlying QUIC library provides it).
+ *            Must be set before <mosquitto_connect>.
+ *            This option is only effective if QUIC support is compiled in.
  */
 libmosq_EXPORT int mosquitto_string_option(struct mosquitto *mosq, enum mosq_opt_t option, const char *value);
 
@@ -1925,6 +1935,37 @@ libmosq_EXPORT void *mosquitto_ssl_get(struct mosquitto *mosq);
  *
  * ====================================================================== */
 /*
+ * Function: mosquitto_quic_regconfig_set
+ *
+ * Configure the QUIC registration parameters for the client. This function
+ * allows setting the application name and execution profile used by the
+ * MsQuic library. These settings are applied when the QUIC registration
+ * is opened during the connection process.
+ *
+ * Must be called before <mosquitto_connect>.
+ *
+ * Parameters:
+ *  mosq -                A valid mosquitto instance.
+ *  app_name -            A null-terminated string for the application name.
+ *                        If NULL, a default name will be used.
+ *  execution_profile_value - An integer representing the QUIC_EXECUTION_PROFILE to use.
+ *                        This influences how MsQuic manages its internal threads and resources.
+ *                        Valid integer values correspond to:
+ *                        - QUIC_EXECUTION_PROFILE_LOW_LATENCY (0) (Default)
+ *                        - QUIC_EXECUTION_PROFILE_TYPE_MAX_THROUGHPUT (1)
+ *                        - QUIC_EXECUTION_PROFILE_TYPE_SCAVENGER (2)
+ *                        - QUIC_EXECUTION_PROFILE_TYPE_REAL_TIME (3)
+ *
+ * Returns:
+ *	MOSQ_ERR_SUCCESS - on success.
+ * 	MOSQ_ERR_INVAL -   if the input parameters were invalid (e.g., mosq is NULL,
+ *                       or execution_profile_value is out of range).
+ *  MOSQ_ERR_NOMEM -   if an out of memory condition occurred.
+ *  MOSQ_ERR_NOT_SUPPORTED - if QUIC support is not compiled in.
+ */
+libmosq_EXPORT int mosquitto_quic_regconfig_set(struct mosquitto *mosq, const char *app_name, int execution_profile);
+
+/*
  * Function: mosquitto_quic_insecure_set
  *
  * Configure verification of the server certificate for QUIC connections. If
@@ -1951,113 +1992,6 @@ libmosq_EXPORT void *mosquitto_ssl_get(struct mosquitto *mosq);
  *	<mosquitto_tls_set>
  */
 libmosq_EXPORT int mosquitto_quic_insecure_set(struct mosquitto *mosq, bool value);
-
-/*
- * Function: mosquitto_quic_resumption_ticket_set
- *
- * Provide a QUIC resumption ticket (as a hex string) to attempt session resumption
- * on the next connection. Must be called before <mosquitto_connect>.
- * The ticket is typically obtained from the `on_quic_resumption_ticket` callback.
- *
- * Parameters:
- *  mosq   - a valid mosquitto instance.
- *  ticket - A null-terminated string containing the resumption ticket encoded
- *           as hexadecimal characters. Must contain an even number of hex digits.
- *
- * Returns:
- *	MOSQ_ERR_SUCCESS - on success.
- * 	MOSQ_ERR_INVAL -   if the input parameters were invalid (NULL mosq, NULL ticket,
- *                     empty ticket, or ticket with invalid hex format/odd length).
- * 	MOSQ_ERR_NOMEM -   if an out of memory condition occurred.
- *  MOSQ_ERR_NOT_SUPPORTED - if QUIC support is not compiled in.
- *
- * See Also:
- *  <mosquitto_quic_resumption_ticket_raw_set>, <mosquitto_quic_resumption_ticket_callback_set>
- */
-libmosq_EXPORT int mosquitto_quic_resumption_ticket_set(struct mosquitto *mosq, const char *ticket);
-
-/*
- * Function: mosquitto_quic_resumption_ticket_raw_set
- *
- * Provide a QUIC resumption ticket (as raw bytes) to attempt session resumption
- * on the next connection. Must be called before <mosquitto_connect>.
- * The ticket is typically obtained from the `on_quic_resumption_ticket` callback.
- *
- * Parameters:
- *  mosq       - a valid mosquitto instance.
- *  ticket     - A pointer to the raw byte buffer containing the resumption ticket.
- *  ticket_len - The length of the ticket buffer in bytes. Must be greater than 0.
- *
- * Returns:
- *	MOSQ_ERR_SUCCESS - on success.
- * 	MOSQ_ERR_INVAL -   if the input parameters were invalid (NULL mosq, NULL ticket,
- *                     or ticket_len is 0).
- * 	MOSQ_ERR_NOMEM -   if an out of memory condition occurred.
- *  MOSQ_ERR_NOT_SUPPORTED - if QUIC support is not compiled in.
- *
- * See Also:
- *  <mosquitto_quic_resumption_ticket_set>, <mosquitto_quic_resumption_ticket_callback_set>
- */
-libmosq_EXPORT int mosquitto_quic_resumption_ticket_raw_set(struct mosquitto *mosq, const uint8_t *ticket, uint32_t ticket_len);
-
-/*
- * Function: mosquitto_quic_encryption_set
- *
- * Enable or disable encryption for the QUIC connection. By default, encryption is enabled.
- * Disabling encryption is highly discouraged for production environments.
- * Must be called before <mosquitto_connect>.
- *
- * Parameters:
- *  mosq  - a valid mosquitto instance.
- *  value - set to true to enable encryption (default), false to disable.
- *
- * Returns:
- *	MOSQ_ERR_SUCCESS - on success.
- * 	MOSQ_ERR_INVAL -   if the mosq parameter was invalid.
- *  MOSQ_ERR_NOT_SUPPORTED - if QUIC support is not compiled in.
- */
-libmosq_EXPORT int mosquitto_quic_encryption_set(struct mosquitto *mosq, uint8_t value);
-
-/*
- * Function: mosquitto_quic_pacing_set
- *
- * Enable or disable pacing for the QUIC connection. Pacing helps to smooth out
- * sending bursts and can improve network behavior. Enabled by default.
- * Must be called before <mosquitto_connect>.
- *
- * Parameters:
- *  mosq  - a valid mosquitto instance.
- *  value - set to true to enable pacing (default), false to disable.
- *
- * Returns:
- *	MOSQ_ERR_SUCCESS - on success.
- * 	MOSQ_ERR_INVAL -   if the mosq parameter was invalid.
- *  MOSQ_ERR_NOT_SUPPORTED - if QUIC support is not compiled in.
- */
-libmosq_EXPORT int mosquitto_quic_pacing_set(struct mosquitto *mosq, uint8_t value);
-
-/*
- * Function: mosquitto_quic_send_buffering_set
- *
- * Enable or disable send buffering for the QUIC connection. Send buffering allows
- * MsQuic to buffer send requests internally, potentially improving performance.
- * Enabled by default.
- * Must be called before <mosquitto_connect>.
- * Note: This sets a parameter for connection creation. Send buffering behavior
- * can also be influenced by the QUIC_PARAM_CONN_SEND_BUFFERING setting via
- * <mosquitto_quic_settings_option> with MOSQ_OPT_QUIC_SEND_BUFFERING_ENABLED.
- *
- * Parameters:
- *  mosq  - a valid mosquitto instance.
- *  value - set to true to enable send buffering, false to disable (default).
- *
- * Returns:
- *	MOSQ_ERR_SUCCESS - on success.
- * 	MOSQ_ERR_INVAL -   if the mosq parameter was invalid.
- *  MOSQ_ERR_NOT_SUPPORTED - if QUIC support is not compiled in.
- */
-libmosq_EXPORT int mosquitto_quic_send_buffering_set(struct mosquitto *mosq, uint8_t value);
-
 
 
 /* ======================================================================

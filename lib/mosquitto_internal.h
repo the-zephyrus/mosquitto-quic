@@ -39,10 +39,8 @@ Contributors:
 
 #include <pthread_compat.h>
 
-#ifndef WITH_QUIC
-#  ifdef WITH_SRV
-#    include <ares.h>
-#  endif
+#ifdef WITH_SRV
+#  include <ares.h>
 #endif
 
 #ifdef WIN32
@@ -220,42 +218,24 @@ struct mosquitto_msg_data{
 
 #define PERF_DEFAULT_SEND_BUFFER_SIZE       0x20000
 
-struct mosq_quic_config {
-    HQUIC handle;
-    char *alpn;
-	bool insecure;
-};
-
-
 struct mosq_quic_stream {
     HQUIC handle;
     struct mosq_quic_connection *connection;
     uint64_t bytes_outstanding;
     uint64_t ideal_sendbuffer;
-};
-
-
-struct mosq_quic_connection_params{
-    uint8_t *resumption_ticket_data;
-    uint32_t resumption_ticket_length;
-    uint8_t use_resumption_ticket;         
-    uint8_t use_encryption;              
-    uint8_t use_pacing;                
-    uint8_t use_send_buffering;
+	struct mosq_quic_stream *next;
+	struct mosq_quic_stream *prev;
 };
 
 struct mosq_quic_connection {
 	HQUIC handle;
 	struct mosquitto *client_ctx;
-    struct mosq_quic_stream *stream;
+	struct mosq_quic_stream *stream;
 };
-
 #endif
 
 struct mosquitto {
 #ifdef WITH_QUIC
-	struct mosq_quic_config quic_config;
-	struct mosq_quic_connection_params quic_connection_params;
 	struct mosq_quic_connection quic_connection;
 #else
 #  if defined(WITH_BROKER) && defined(WITH_EPOLL)
@@ -267,9 +247,9 @@ struct mosquitto {
 	struct gaicb *adns; /* For getaddrinfo_a */
 #  endif
 #endif
-#  ifndef WITH_BROKER
+#ifndef WITH_BROKER
 	mosq_sock_t sockpairR, sockpairW;
-#  endif
+#endif
 	uint32_t maximum_packet_size;
 	enum mosquitto__protocol protocol;
 	char *address;
@@ -293,7 +273,7 @@ struct mosquitto {
 	uint32_t will_delay_interval;
 	time_t will_delay_time;
 
-#  ifdef WITH_TLS
+#ifdef WITH_TLS
 	SSL *ssl;
 	SSL_CTX *ssl_ctx;
 #  ifndef WITH_BROKER
@@ -317,8 +297,17 @@ struct mosquitto {
 	bool tls_ocsp_required;
 	bool tls_use_os_certs;
 	enum mosquitto__keyform tls_keyform;
-#  endif
+#endif
 	bool want_write;
+
+#ifdef WITH_QUIC
+	char *quic_app_name;
+	QUIC_EXECUTION_PROFILE quic_execution_profile;
+	char *quic_alpn;
+    bool quic_insecure;
+	QUIC_BUFFER *quic_resumption_ticket;
+    uint8_t quic_use_send_buffering;
+#endif
 
 #if defined(WITH_THREADING) && !defined(WITH_BROKER)
 	pthread_mutex_t callback_mutex;

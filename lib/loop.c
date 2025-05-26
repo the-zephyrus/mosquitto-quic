@@ -38,18 +38,13 @@ Contributors:
 
 static int mosquitto__loop_rc_handle(struct mosquitto *mosq, int rc)
 {
-	enum mosquitto_client_state state;
-#ifndef WITH_QUIC
+	// enum mosquitto_client_state state;
 	if(rc){
-		net__socket_close(mosq);
-#else
-	if(rc && rc != MOSQ_ERR_QUIC_HANDSHAKE){
-		net__quic_close_connection(mosq);
-#endif
-		state = mosquitto__get_state(mosq);
-		if(state == mosq_cs_disconnecting || state == mosq_cs_disconnected){
-			rc = MOSQ_ERR_SUCCESS;
-		}
+		net__shutdown_connection(mosq);
+		// state = mosquitto__get_state(mosq);
+		// // if(state == mosq_cs_disconnecting || state == mosq_cs_disconnected){
+		// // 	rc = MOSQ_ERR_SUCCESS;
+		// // }
 
 		void (*on_disconnect)(struct mosquitto *, void *userdata, int rc);
 		void (*on_disconnect_v5)(struct mosquitto *, void *userdata, int rc, const mosquitto_property *props);
@@ -74,7 +69,6 @@ static int mosquitto__loop_rc_handle(struct mosquitto *mosq, int rc)
 int mosquitto_loop(struct mosquitto *mosq, int timeout, int max_packets)
 {
 #ifdef WITH_QUIC
-
 #  ifdef HAVE_PSELECT
 	struct timespec local_timeout;
 #  else
@@ -82,18 +76,16 @@ int mosquitto_loop(struct mosquitto *mosq, int timeout, int max_packets)
 #  endif
 	fd_set readfds;
 	int fdcount;
-	int rc;
+	int rc = MOSQ_ERR_SUCCESS;
 	signed char pairbuf;
+	ssize_t read_length;
 	int maxfd = 0;
 	time_t now;
 	time_t timeout_ms;
 
 	if(!mosq || max_packets < 1) return MOSQ_ERR_INVAL;
-	#  ifndef WIN32
-		if(mosq->sockpairR >= FD_SETSIZE){
-			return MOSQ_ERR_INVAL;
-		}
-	#  endif
+
+	if(!net__connection_valid(mosq)) return MOSQ_ERR_NO_CONN;
 
 	FD_ZERO(&readfds);
 	if(mosq->sockpairR != INVALID_SOCKET){
@@ -144,27 +136,34 @@ int mosquitto_loop(struct mosquitto *mosq, int timeout, int max_packets)
 		}
 	}else{
 		if(mosq->sockpairR != INVALID_SOCKET && FD_ISSET(mosq->sockpairR, &readfds)){
+			do{
 #  ifndef WIN32
-			while(read(mosq->sockpairR, &pairbuf, 1) > 0){
+				read_length = read(mosq->sockpairR, &pairbuf, 1);
 #  else
-			while(recv(mosq->sockpairR, &pairbuf, 1, 0) > 0){
+				read_length = recv(mosq->sockpairR, &pairbuf, 1, 0);
 #  endif
-				rc = pairbuf;
-				rc = mosquitto__loop_rc_handle(mosq, rc);
-				if(rc){
-					return rc;
+				if(read_length == 1){
+					rc = pairbuf;
+				}else if(read_length == -1){
+#  ifdef WIN32
+                	errno = WSAGetLastError();
+#  endif
+					if (errno != EINTR && errno != EAGAIN && errno != COMPAT_EWOULDBLOCK) {
+						return MOSQ_ERR_ERRNO;
+					}
 				}
-			}
+			} while(read_length > 0 && rc == 0);	
 		}
 	}
-	if(mosquitto_want_write(mosq)){
+
+	if(!rc && mosquitto_want_write(mosq)){
 		rc = mosquitto_loop_write(mosq, max_packets);
-		if(rc || mosq->quic_connection.handle == NULL){
-			return rc;
-		}
+	}
+
+	if(rc){
+		return mosquitto__loop_rc_handle(mosq, rc);
 	}
 	return mosquitto_loop_misc(mosq);
-
 #else
 #  ifdef HAVE_PSELECT
 	struct timespec local_timeout;
@@ -400,8 +399,7 @@ int mosquitto_loop_forever(struct mosquitto *mosq, int timeout, int max_packets)
 			case MOSQ_ERR_PROXY:
 #ifdef WITH_QUIC
 			case MOSQ_ERR_QUIC_API:
-			case MOSQ_ERR_QUIC_UNINITIALIZED:
-			case MOSQ_ERR_QUIC_INVALID_STREAM:
+			case MOSQ_ERR_QUIC_NOT_INIT:
 #endif
 				return rc;
 #ifdef WITH_QUIC
@@ -457,11 +455,8 @@ int mosquitto_loop_forever(struct mosquitto *mosq, int timeout, int max_packets)
 int mosquitto_loop_misc(struct mosquitto *mosq)
 {
 	if(!mosq) return MOSQ_ERR_INVAL;
-#ifdef WITH_QUIC
-	if(mosq->quic_connection.handle == NULL) return MOSQ_ERR_NO_CONN;
-#else
-	if(mosq->sock == INVALID_SOCKET) return MOSQ_ERR_NO_CONN;
-#endif
+
+	if(!net__connection_valid(mosq)) return MOSQ_ERR_NO_CONN;
 
 	return mosquitto__check_keepalive(mosq);
 }
@@ -518,11 +513,9 @@ int mosquitto_loop_write(struct mosquitto *mosq, int max_packets)
 		rc = packet__write(mosq);
 #ifndef WITH_QUIC
 		if(rc || errno == EAGAIN || errno == COMPAT_EWOULDBLOCK){
-#else
-		if(rc){
-#endif
 			return mosquitto__loop_rc_handle(mosq, rc);
 		}
+#endif
 	}
 	return rc;
 }

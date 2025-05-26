@@ -5,11 +5,10 @@
 #include "mosquitto_internal.h"
 #include "msquic.h"
 
-int msquic_init(const char *appname, QUIC_EXECUTION_PROFILE execution_profile);
+int msquic_init(void);
 void msquic_cleanup(void);
 
-int msquic_setup_client_configuration(struct mosquitto *mosq);
-void msquic_close_client_configuration(struct mosquitto *mosq);
+int msquic_init_client(struct mosquitto *mosq);
 
 int msquic_start_connection(struct mosq_quic_connection *connection, const char *host, uint16_t port, const char *bind_address);
 int msquic_shutdown_connection(const struct mosq_quic_connection *connection);

@@ -18,10 +18,6 @@
 #ifndef NET_MOSQ_H
 #define NET_MOSQ_H
 
-#ifdef WITH_QUIC
-#include "msquic.h"
-#endif
-
 #ifndef WIN32
 #  include <sys/socket.h>
 #  include <unistd.h>
@@ -31,6 +27,10 @@
 typedef SSIZE_T ssize_t;
 #    define _SSIZE_T_DEFINED
 #  endif
+#endif
+
+#ifdef WITH_QUIC
+#  include "msquic.h"
 #endif
 
 #include "mosquitto_internal.h"
@@ -64,17 +64,14 @@ typedef SSIZE_T ssize_t;
 #define MOSQ_MSB(A) (uint8_t)((A & 0xFF00) >> 8)
 #define MOSQ_LSB(A) (uint8_t)(A & 0x00FF)
 
+int net__init(void);
+void net__cleanup(void);
 
 #ifndef WITH_QUIC
-    // --- TCP/TLS Specific Functions ---
-    int net__init(void);
-    void net__cleanup(void);
     #ifdef WITH_TLS
         void net__init_tls(void);
     #endif
 
-    int net__socket_connect(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address, bool blocking);
-    int net__socket_close(struct mosquitto *mosq);
     int net__try_connect(const char *host, uint16_t port, mosq_sock_t *sock, const char *bind_address, bool blocking);
     int net__try_connect_step1(struct mosquitto *mosq, const char *host);
     int net__try_connect_step2(struct mosquitto *mosq, uint16_t port, mosq_sock_t *sock);
@@ -96,15 +93,16 @@ typedef SSIZE_T ssize_t;
         #define ENGINE_PIN "PIN"
     #endif // WITH_TLS
 
-#else // WITH_QUIC
-    int net__init(const char *appname, QUIC_EXECUTION_PROFILE execution_profile);
-    void net__cleanup(void);
-    int net__quic_connect(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address);
-    int net__quic_close_connection(struct mosquitto *mosq);
-    void net__quic_close_configuration(struct mosquitto *mosq);
+#else
+    int net_init_quic_client(struct mosquitto *mosq);
     int net__write(const struct mosq_quic_stream *stream, const void *buf, uint32_t count, void* client_context);
-    void net__loop_wakeup(struct mosquitto *mosq, enum mosq_err_t rc);
-#endif // WITH_QUIC
+    void net__wakeup_loop(struct mosquitto *mosq, enum mosq_err_t rc);
+#endif
+
+int net__start_connection(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address, bool blocking);
+int net__shutdown_connection(struct mosquitto *mosq);
+bool net__connection_valid(struct mosquitto *mosq);
+
 
 int net__socket_nonblock(mosq_sock_t *sock);
 #ifndef WITH_BROKER

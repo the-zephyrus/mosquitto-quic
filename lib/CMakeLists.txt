@@ -35,6 +35,7 @@ set(C_SRC
 	messages_mosq.c messages_mosq.h
 	misc_mosq.c misc_mosq.h
 	msquic_mosq.c msquic_mosq.h
+	msquic_mosq_helper.c msquic_mosq_helper.h
 	mosquitto.c ../include/mosquitto.h
 	mosquitto_internal.h
 	../include/mqtt_protocol.h

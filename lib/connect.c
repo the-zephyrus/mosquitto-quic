@@ -46,6 +46,11 @@ static int mosquitto__connect_init(struct mosquitto *mosq, const char *host, int
 	if(!host || port < 0 || port > UINT16_MAX) return MOSQ_ERR_INVAL;
 	if(keepalive != 0 && (keepalive < 5 || keepalive > UINT16_MAX)) return MOSQ_ERR_INVAL;
 
+	rc = net_init_quic_client(mosq);
+	if(rc){
+		return rc;
+	}
+
 	/* Only MQTT v3.1 requires a client id to be sent */
 	if(mosq->id == NULL && (mosq->protocol == mosq_p_mqtt31)){
 		mosq->id = (char *)mosquitto__calloc(24, sizeof(char));
@@ -190,32 +195,24 @@ static int mosquitto__reconnect(struct mosquitto *mosq, bool blocking)
 
 	message__reconnect_reset(mosq, false);
 
-#ifdef WITH_QUIC
-	if(mosq->quic_connection.handle){
-		net__quic_close_connection(mosq);
+	if(net__connection_valid(mosq)){
+		net__shutdown_connection(mosq);
 	}
-#else
-	if(mosq->sock != INVALID_SOCKET){
-		net__socket_close(mosq);
-	}
-#endif
 
 #ifdef WITH_SOCKS
 	if(mosq->socks5_host){
-		rc = net__socket_connect(mosq, mosq->socks5_host, mosq->socks5_port, mosq->bind_address, blocking);
+		rc = net__start_connection(mosq, mosq->socks5_host, mosq->socks5_port, mosq->bind_address, blocking);
 	}else
 #else
 	{
-#  ifdef WITH_QUIC
-		UNUSED(blocking);
-		rc = net__quic_connect(mosq, mosq->host, mosq->port, mosq->bind_address);
-#  else
-		rc = net__socket_connect(mosq, mosq->host, mosq->port, mosq->bind_address, blocking);
-		log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s try connect", SAFE_PRINT(mosq->id));
-#  endif
+#ifdef WITH_QUIC
+		mosquitto__set_state(mosq, mosq_cs_connect_pending);
+#endif
+		rc = net__start_connection(mosq, mosq->host, mosq->port, mosq->bind_address, blocking);
 	}
 #endif
-	if(rc>0){
+
+	if(rc > 0){
 #ifndef WITH_QUIC
 		mosquitto__set_state(mosq, mosq_cs_connect_pending);
 #endif
@@ -232,15 +229,10 @@ static int mosquitto__reconnect(struct mosquitto *mosq, bool blocking)
 #ifndef WITH_QUIC
 		mosquitto__set_state(mosq, mosq_cs_connected);
 #endif
-
 		rc = send__connect(mosq, mosq->keepalive, mosq->clean_start, outgoing_properties);
 		if(rc){
 			packet__cleanup_all(mosq);
-#ifdef WITH_QUIC
-			net__quic_close_connection(mosq);
-#else
-			net__socket_close(mosq);
-#endif
+			net__shutdown_connection(mosq);
 			mosquitto__set_state(mosq, mosq_cs_new);
 		}
 		return rc;
@@ -277,11 +269,8 @@ int mosquitto_disconnect_v5(struct mosquitto *mosq, int reason_code, const mosqu
 
 	mosquitto__set_state(mosq, mosq_cs_disconnected);
 	mosquitto__set_request_disconnect(mosq, true);
-#ifdef WITH_QUIC
-	if(!mosq->quic_connection.handle){
-#else
-	if(mosq->sock == INVALID_SOCKET){
-#endif
+
+	if(!net__connection_valid(mosq)){
 		return MOSQ_ERR_NO_CONN;
 	}else{
 		return send__disconnect(mosq, (uint8_t)reason_code, outgoing_properties);
@@ -292,11 +281,8 @@ int mosquitto_disconnect_v5(struct mosquitto *mosq, int reason_code, const mosqu
 void do_client_disconnect(struct mosquitto *mosq, int reason_code, const mosquitto_property *properties)
 {
 	mosquitto__set_state(mosq, mosq_cs_disconnected);
-#ifdef WITH_QUIC
-	net__quic_close_connection(mosq);
-#else
-	net__socket_close(mosq);
-#endif
+
+	net__shutdown_connection(mosq);
 
 	/* Free data and reset values */
 	pthread_mutex_lock(&mosq->out_packet_mutex);

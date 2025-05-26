@@ -105,4 +105,5 @@ obj-*/
 # Others
 tmp/
 .vscode/
+install/
 benchmark_mqtt_quic/

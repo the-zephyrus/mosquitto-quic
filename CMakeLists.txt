@@ -5,6 +5,7 @@
 # line utility including the "-i" option.
 
 option(WITH_QUIC "Enable QUIC support?" ON)
+
 if (WITH_QUIC)
     cmake_minimum_required(VERSION 3.16)
 else()
@@ -33,34 +34,8 @@ include(GNUInstallDirs)
 
 if (WITH_QUIC)
 	add_definitions("-DWITH_QUIC")
-
-	set(CMAKE_C_FLAGS_DEBUG "-Og -fno-omit-frame-pointer")  
-	set(CMAKE_C_FLAGS_MINSIZEREL "-Os -DNDEBUG")            
-	set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O3 -fno-omit-frame-pointer ${MARCH} -DNDEBUG")
-	set(CMAKE_C_FLAGS_RELEASE "-O3 ${MARCH} -DNDEBUG")
-	if (CX_PLATFORM STREQUAL "darwin")
-		set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -gdwarf")
-		set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -gdwarf")
-	else()
-		set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -ggdb3")
-		set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -ggdb3")
-	endif()
-
-	foreach(BUILD_TYPE DEBUG MINSIZEREL RELWITHDEBINFO RELEASE)
-		set(CMAKE_CXX_FLAGS_${BUILD_TYPE} ${CMAKE_C_FLAGS_${BUILD_TYPE}})
-	endforeach()
-
-	if (WIN32)
-		set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-		set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /NODEFAULTLIB:libucrt.lib /DEFAULTLIB:ucrt.lib")
-		set(QUIC_TLS "schannel" CACHE STRING "TLS Library to use")
-	else()
-		set(QUIC_TLS "openssl" CACHE STRING "TLS Library to use")
-	endif()
-
-	set(QUIC_ENABLE_LOGGING ON CACHE BOOL "Enable MsQuic logging")
+	set(QUIC_ENABLE_LOGGING OFF CACHE BOOL "Enable MsQuic logging" FORCE)
     set(QUIC_BUILD_SHARED OFF CACHE BOOL "Builds MsQuic as a static library" FORCE)
-
 	add_subdirectory(quic/msquic)
 endif()
 

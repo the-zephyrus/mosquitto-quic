@@ -79,12 +79,8 @@ int mosquitto_lib_init(void)
 		gettimeofday(&tv, NULL);
 		srand(tv.tv_sec*1000 + tv.tv_usec/1000);
 #endif
-
-#ifndef WITH_QUIC
 		rc = net__init();
-#else
-		rc = net__init("mosquitto_client",  QUIC_EXECUTION_PROFILE_TYPE_REAL_TIME);
-#endif
+
 		if (rc != MOSQ_ERR_SUCCESS) {
 			return rc;
 		}
@@ -166,13 +162,15 @@ int mosquitto_reinitialise(struct mosquitto *mosq, const char *id, bool clean_st
 	}
 	mosq->protocol = mosq_p_mqtt311;
 #ifdef WITH_QUIC
+	mosq->quic_app_name = NULL;
+	mosq->quic_execution_profile = QUIC_EXECUTION_PROFILE_LOW_LATENCY;
+	mosq->quic_alpn = NULL;
+	mosq->quic_insecure = false;
+	mosq->quic_use_send_buffering = FALSE;
+	mosq->quic_resumption_ticket = NULL;
 	mosq->quic_connection.handle = NULL;
 	mosq->quic_connection.client_ctx = mosq;
 	mosq->quic_connection.stream = NULL;
-	mosq->quic_connection_params.use_resumption_ticket = 0;
-	mosq->quic_connection_params.use_encryption = 1;
-	mosq->quic_connection_params.use_pacing = 1;
-	mosq->quic_connection_params.use_send_buffering = 0;
 #else
 	mosq->sock = INVALID_SOCKET;
 #endif
@@ -223,8 +221,7 @@ int mosquitto_reinitialise(struct mosquitto *mosq, const char *id, bool clean_st
 	mosq->reconnect_delay_max = 1;
 	mosq->reconnect_exponential_backoff = false;
 	mosq->threaded = mosq_ts_none;
-#ifndef WITH_QUIC
-  #ifdef WITH_TLS
+#ifdef WITH_TLS
 	mosq->ssl = NULL;
 	mosq->ssl_ctx = NULL;
 	mosq->ssl_ctx_defaults = true;
@@ -232,7 +229,6 @@ int mosquitto_reinitialise(struct mosquitto *mosq, const char *id, bool clean_st
 	mosq->tls_insecure = false;
 	mosq->want_write = false;
 	mosq->tls_ocsp_required = false;
-  #endif
 #endif
 #ifdef WITH_THREADING
 	pthread_mutex_init(&mosq->callback_mutex, NULL);
@@ -288,32 +284,23 @@ void mosquitto__destroy(struct mosquitto *mosq)
 	}
 #endif
 
-#ifdef WITH_QUIC
-	if(mosq->quic_connection.handle){
-		net__quic_close_connection(mosq);
+	if(net__connection_valid(mosq)){
+		net__shutdown_connection(mosq);
 	}
 
-	if(mosq->quic_connection_params.use_resumption_ticket){
-		mosquitto__free(mosq->quic_connection_params.resumption_ticket_data);
-		mosq->quic_connection_params.resumption_ticket_data = NULL;
-		mosq->quic_connection_params.resumption_ticket_length = 0;
-		mosq->quic_connection_params.use_resumption_ticket = 0;
-	}
-
-	if(mosq->quic_config.handle){
-		net__quic_close_configuration(mosq);
-		mosquitto__free(mosq->quic_config.alpn);
-		mosq->quic_config.alpn = NULL;
-	}
-#else
-	if(mosq->sock != INVALID_SOCKET){
-		net__socket_close(mosq);
-	}
-#endif
 	message__cleanup_all(mosq);
 	will__clear(mosq);
-#ifndef WITH_QUIC
-#  ifdef WITH_TLS
+#ifdef WITH_QUIC
+	mosquitto__free(mosq->quic_app_name);
+	mosq->quic_app_name = NULL;
+
+	mosquitto__free(mosq->quic_alpn);
+	mosq->quic_alpn = NULL;
+
+	mosquitto__free(mosq->quic_resumption_ticket);
+	mosq->quic_resumption_ticket = NULL;
+#endif
+#ifdef WITH_TLS
 	if(mosq->ssl){
 		SSL_free(mosq->ssl);
 	}
@@ -330,7 +317,6 @@ void mosquitto__destroy(struct mosquitto *mosq)
 	mosquitto__free(mosq->tls_psk);
 	mosquitto__free(mosq->tls_psk_identity);
 	mosquitto__free(mosq->tls_alpn);
-#  endif
 #endif
 
 	mosquitto__free(mosq->address);

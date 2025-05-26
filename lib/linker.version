@@ -144,10 +144,6 @@ MOSQ_1.7 {
 
 MOSQ_1.8 {
     global:
+		mosquitto_quic_regconfig_set;
 		mosquitto_quic_insecure_set;
-		mosquitto_quic_resumption_ticket_set;
-		mosquitto_quic_resumption_ticket_raw_set;
-		mosquitto_quic_encryption_set;
-		mosquitto_quic_encryption_set;
-		mosquitto_quic_pacing_set;
 } MOSQ_1.7;
