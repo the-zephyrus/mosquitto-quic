@@ -46,11 +46,6 @@ static int mosquitto__connect_init(struct mosquitto *mosq, const char *host, int
 	if(!host || port < 0 || port > UINT16_MAX) return MOSQ_ERR_INVAL;
 	if(keepalive != 0 && (keepalive < 5 || keepalive > UINT16_MAX)) return MOSQ_ERR_INVAL;
 
-	rc = net_init_quic_client(mosq);
-	if(rc){
-		return rc;
-	}
-
 	/* Only MQTT v3.1 requires a client id to be sent */
 	if(mosq->id == NULL && (mosq->protocol == mosq_p_mqtt31)){
 		mosq->id = (char *)mosquitto__calloc(24, sizeof(char));
@@ -81,6 +76,11 @@ static int mosquitto__connect_init(struct mosquitto *mosq, const char *host, int
 	mosq->msgs_out.inflight_quota = mosq->msgs_out.inflight_maximum;
 	mosq->retain_available = 1;
 	mosquitto__set_request_disconnect(mosq, false);
+
+	rc = net__init_quic_client(mosq);
+	if(rc){
+		return rc;
+	}
 
 	return MOSQ_ERR_SUCCESS;
 }

@@ -115,11 +115,10 @@ struct mosquitto *mosquitto_new(const char *id, bool clean_start, void *userdata
 
 	mosq = (struct mosquitto *)mosquitto__calloc(1, sizeof(struct mosquitto));
 	if(mosq){
-#ifdef WITH_QUIC
-		mosq->quic_connection.handle = NULL;
-		mosq->quic_connection.stream = NULL;
-#else
+#ifndef WITH_QUIC
 		mosq->sock = INVALID_SOCKET;
+#else
+		mosq->quic_connection.handle = NULL;
 #endif
 #ifdef WITH_THREADING
 		mosq->thread_id = pthread_self();
@@ -161,20 +160,14 @@ int mosquitto_reinitialise(struct mosquitto *mosq, const char *id, bool clean_st
 		mosq->userdata = mosq;
 	}
 	mosq->protocol = mosq_p_mqtt311;
-#ifdef WITH_QUIC
-	mosq->quic_app_name = NULL;
-	mosq->quic_execution_profile = QUIC_EXECUTION_PROFILE_LOW_LATENCY;
-	mosq->quic_alpn = NULL;
-	mosq->quic_insecure = false;
-	mosq->quic_use_send_buffering = FALSE;
-	mosq->quic_resumption_ticket = NULL;
-	mosq->quic_connection.handle = NULL;
-	mosq->quic_connection.client_ctx = mosq;
-	mosq->quic_connection.stream = NULL;
-#else
+	
+#ifndef WITH_QUIC
 	mosq->sock = INVALID_SOCKET;
+#else
+	mosq->quic_connection.handle = NULL;
+	mosq->quic_connection.mosq = mosq;
+	CxPlatListInitializeHead(&mosq->quic_connection.stream_list_head);
 #endif
-
 #ifndef WITH_BROKER
 	mosq->sockpairR = INVALID_SOCKET;
 	mosq->sockpairW = INVALID_SOCKET;
@@ -221,6 +214,15 @@ int mosquitto_reinitialise(struct mosquitto *mosq, const char *id, bool clean_st
 	mosq->reconnect_delay_max = 1;
 	mosq->reconnect_exponential_backoff = false;
 	mosq->threaded = mosq_ts_none;
+#ifdef WITH_QUIC
+	mosq->quic_app_name = NULL;
+	mosq->quic_execution_profile = QUIC_EXECUTION_PROFILE_LOW_LATENCY;
+	mosq->quic_alpn = NULL;
+	mosq->quic_insecure = false;
+	mosq->quic_use_send_buffering = FALSE;
+	mosq->quic_resumption_ticket = NULL;
+	mosq->quic_stream_count = 1;
+#endif
 #ifdef WITH_TLS
 	mosq->ssl = NULL;
 	mosq->ssl_ctx = NULL;

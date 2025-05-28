@@ -1064,7 +1064,7 @@ void *mosquitto_ssl_get(struct mosquitto *mosq)
 #endif
 
 #else
-int net_init_quic_client(struct mosquitto *mosq)
+int net__init_quic_client(struct mosquitto *mosq)
 {
 	if(!mosq) return MOSQ_ERR_INVAL;
 

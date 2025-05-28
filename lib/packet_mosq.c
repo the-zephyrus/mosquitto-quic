@@ -226,77 +226,56 @@ int packet__check_oversize(struct mosquitto *mosq, uint32_t remaining_length)
 
 #ifdef WITH_QUIC
 
-void packet__process_sent(struct mosq_quic_stream *stream, struct mosquitto__packet *packet)
+void packet__process_sent(struct mosquitto *mosq, struct mosquitto__packet *packet)
 {
-	struct mosquitto *mosq = stream->connection->client_ctx;
+	if(!mosq || !packet){
+		return;
+	}
 
-    // Add log statement here
-    if (packet) {
-        log__printf(mosq, MOSQ_LOG_DEBUG, "QUIC: Processing sent packet, command=0x%02x", packet->command);
-    } else {
-        log__printf(mosq, MOSQ_LOG_WARNING, "QUIC: packet__process_sent called with NULL packet");
-        return; // Or handle NULL packet appropriately
-    }
-
-    if (packet->to_process == 0){ // Check to_process after logging the command
-        G_MSGS_SENT_INC(1);
-        if(((packet->command)&0xF6) == CMD_PUBLISH){
-            G_PUB_MSGS_SENT_INC(1);
+	G_MSGS_SENT_INC(1);
+	if(((packet->command)&0xF6) == CMD_PUBLISH){
+		G_PUB_MSGS_SENT_INC(1);
 #ifndef WITH_BROKER
-            COMPAT_pthread_mutex_lock(&mosq->callback_mutex);
-            if(mosq->on_publish){
-                /* This is a QoS=0 message */
-                mosq->in_callback = true;
-                mosq->on_publish(mosq, mosq->userdata, packet->mid);
-                mosq->in_callback = false;
-            }
-            if(mosq->on_publish_v5){
-                /* This is a QoS=0 message */
-                mosq->in_callback = true;
-                mosq->on_publish_v5(mosq, mosq->userdata, packet->mid, 0, NULL);
-                mosq->in_callback = false;
-            }
-            COMPAT_pthread_mutex_unlock(&mosq->callback_mutex);
-        }else if(((packet->command)&0xF0) == CMD_DISCONNECT){
-            // Log before potential disconnect and return
-            log__printf(mosq, MOSQ_LOG_DEBUG, "QUIC: Sent DISCONNECT packet, initiating client disconnect.");
-            do_client_disconnect(mosq, MOSQ_ERR_SUCCESS, NULL);
-            packet__cleanup(packet);
-            mosquitto__free(packet);
-            return;
+		COMPAT_pthread_mutex_lock(&mosq->callback_mutex);
+		if(mosq->on_publish){
+			/* This is a QoS=0 message */
+			mosq->in_callback = true;
+			mosq->on_publish(mosq, mosq->userdata, packet->mid);
+			mosq->in_callback = false;
+		}
+		if(mosq->on_publish_v5){
+			/* This is a QoS=0 message */
+			mosq->in_callback = true;
+			mosq->on_publish_v5(mosq, mosq->userdata, packet->mid, 0, NULL);
+			mosq->in_callback = false;
+		}
+		COMPAT_pthread_mutex_unlock(&mosq->callback_mutex);
+	}else if(((packet->command)&0xF0) == CMD_DISCONNECT){
+		do_client_disconnect(mosq, MOSQ_ERR_SUCCESS, NULL);
+		packet__cleanup(packet);
+		mosquitto__free(packet);
+		return;
 #endif
-        }else if(((packet->command)&0xF0) == CMD_PUBLISH){
-            G_PUB_MSGS_SENT_INC(1);
-        }
+	}else if(((packet->command)&0xF0) == CMD_PUBLISH){
+		G_PUB_MSGS_SENT_INC(1);
+	}
 
-        // Log before cleanup and free
-        log__printf(mosq, MOSQ_LOG_DEBUG, "QUIC: Cleaning up sent packet, command=0x%02x", packet->command);
-        packet__cleanup(packet);
-        mosquitto__free(packet);
+	packet__cleanup(packet);
+	mosquitto__free(packet);
 
 #ifdef WITH_BROKER
-        mosq->next_msg_out = db.now_s + mosq->keepalive;
+	mosq->next_msg_out = db.now_s + mosq->keepalive;
 #else
-        COMPAT_pthread_mutex_lock(&mosq->msgtime_mutex);
-        mosq->next_msg_out = mosquitto_time() + mosq->keepalive;
-        COMPAT_pthread_mutex_unlock(&mosq->msgtime_mutex);
+	COMPAT_pthread_mutex_lock(&mosq->msgtime_mutex);
+	mosq->next_msg_out = mosquitto_time() + mosq->keepalive;
+	COMPAT_pthread_mutex_unlock(&mosq->msgtime_mutex);
 #endif
-    } else {
-        // Log if the packet is not fully processed (to_process != 0)
-        log__printf(mosq, MOSQ_LOG_DEBUG, "QUIC: Packet sent but not fully processed yet? command=0x%02x, to_process=%u", packet->command, packet->to_process);
-    }
 }
 
-
-int packet__write(struct mosquitto *mosq)
+int packet__write_on_stream(struct mosquitto *mosq, struct mosq_quic_stream *stream)
 {
 	uint32_t bytes_to_send;
 	struct mosquitto__packet *packet;
-	enum mosquitto_client_state state;
-
-	if (!mosq) return MOSQ_ERR_INVAL;
-
-	if(!net__connection_valid(mosq)) return MOSQ_ERR_NO_CONN;
 
 	COMPAT_pthread_mutex_lock(&mosq->current_out_packet_mutex);
 	COMPAT_pthread_mutex_lock(&mosq->out_packet_mutex);
@@ -309,16 +288,6 @@ int packet__write(struct mosquitto *mosq)
 		mosq->out_packet_count--;
 	}
 	COMPAT_pthread_mutex_unlock(&mosq->out_packet_mutex);
-
-	state = mosquitto__get_state(mosq);
-	if(state == mosq_cs_connect_pending){
-		COMPAT_pthread_mutex_unlock(&mosq->current_out_packet_mutex);
-		return MOSQ_ERR_SUCCESS;
-	}
-
-	struct mosq_quic_stream *stream = mosq->quic_connection.stream;
-
-	if(!stream || stream->handle == NULL) return MOSQ_ERR_QUIC_NOT_INIT;
 
 	while(mosq->current_out_packet && stream->bytes_outstanding < stream->ideal_sendbuffer){
 		packet = mosq->current_out_packet;
@@ -346,22 +315,72 @@ int packet__write(struct mosquitto *mosq)
 	return MOSQ_ERR_SUCCESS;
 }
 
-
-int packet__read(struct mosq_quic_stream *stream, const uint8_t *buf, uint32_t buf_len, uint32_t *bytes_consumed)
+static struct mosq_quic_stream* select_best_stream(struct mosquitto *mosq)
 {
-    uint8_t byte;
-    int rc = 0;
+    if (!mosq || CxPlatListIsEmpty(&mosq->quic_connection.stream_list_head)) {
+        return NULL;
+    }
 
-    if(!stream || !buf || !bytes_consumed){
+    CXPLAT_LIST_ENTRY *stream_entry = mosq->quic_connection.stream_list_head.Flink;
+    struct mosq_quic_stream *best_stream = NULL;
+    uint64_t min_outstanding = UINT64_MAX;
+
+    while (stream_entry != &mosq->quic_connection.stream_list_head) {
+        struct mosq_quic_stream *stream = CXPLAT_CONTAINING_RECORD(stream_entry, struct mosq_quic_stream, list_entry);
+        
+        if (stream && stream->handle && 
+            stream->bytes_outstanding < stream->ideal_sendbuffer &&
+            stream->bytes_outstanding < min_outstanding) {
+            
+            best_stream = stream;
+            min_outstanding = stream->bytes_outstanding;
+        }
+        
+        stream_entry = stream_entry->Flink;
+    }
+
+    return best_stream;
+}
+
+int packet__write(struct mosquitto *mosq)
+{
+	enum mosquitto_client_state state;
+
+	if (!mosq) return MOSQ_ERR_INVAL;
+
+	if(!net__connection_valid(mosq)) return MOSQ_ERR_NO_CONN;
+
+	state = mosquitto__get_state(mosq);
+	if(state == mosq_cs_connect_pending){
+		return MOSQ_ERR_SUCCESS;
+	}
+
+    struct mosq_quic_stream *stream = NULL;
+	COMPAT_pthread_mutex_lock(&mosq->out_packet_mutex);
+    while (mosq->out_packet) {
+		COMPAT_pthread_mutex_unlock(&mosq->out_packet_mutex);
+        stream = select_best_stream(mosq);
+		if(!stream) {
+			return MOSQ_ERR_SUCCESS;
+		}
+		int rc = packet__write_on_stream(mosq, stream);
+		if (rc) {
+			return rc;
+		}
+    }
+    return MOSQ_ERR_SUCCESS;
+}
+
+
+int packet__read(struct mosquitto *mosq, const uint8_t *buf, uint32_t buf_len, uint32_t *bytes_consumed)
+{
+    if(!mosq || !buf || !bytes_consumed){
         return MOSQ_ERR_INVAL;
     }
 
+	uint8_t byte;
+    int rc = 0;
     *bytes_consumed = 0;
-	struct mosq_quic_connection *connection = stream->connection;
-	if(!connection || !connection->client_ctx){
-		return MOSQ_ERR_INVAL;
-	}
-	struct mosquitto *mosq = connection->client_ctx;
 
     /* This gets called when the caller provides data in 'buf'.
      * What we do depends on what data we already have (state in mosq->in_packet).

@@ -31,6 +31,7 @@ typedef SSIZE_T ssize_t;
 
 #ifdef WITH_QUIC
 #  include "msquic.h"
+#  include "quic_platform.h"
 #endif
 
 #include "mosquitto_internal.h"
@@ -94,15 +95,13 @@ void net__cleanup(void);
     #endif // WITH_TLS
 
 #else
-    int net_init_quic_client(struct mosquitto *mosq);
+    int net__init_quic_client(struct mosquitto *mosq);
     int net__write(const struct mosq_quic_stream *stream, const void *buf, uint32_t count, void* client_context);
     void net__wakeup_loop(struct mosquitto *mosq, enum mosq_err_t rc);
 #endif
-
 int net__start_connection(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address, bool blocking);
 int net__shutdown_connection(struct mosquitto *mosq);
 bool net__connection_valid(struct mosquitto *mosq);
-
 
 int net__socket_nonblock(mosq_sock_t *sock);
 #ifndef WITH_BROKER

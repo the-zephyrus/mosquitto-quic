@@ -38,13 +38,13 @@ Contributors:
 
 static int mosquitto__loop_rc_handle(struct mosquitto *mosq, int rc)
 {
-	// enum mosquitto_client_state state;
+	enum mosquitto_client_state state;
 	if(rc){
 		net__shutdown_connection(mosq);
-		// state = mosquitto__get_state(mosq);
-		// // if(state == mosq_cs_disconnecting || state == mosq_cs_disconnected){
-		// // 	rc = MOSQ_ERR_SUCCESS;
-		// // }
+		state = mosquitto__get_state(mosq);
+		if(state == mosq_cs_disconnecting || state == mosq_cs_disconnected){
+			rc = MOSQ_ERR_SUCCESS;
+		}
 
 		void (*on_disconnect)(struct mosquitto *, void *userdata, int rc);
 		void (*on_disconnect_v5)(struct mosquitto *, void *userdata, int rc, const mosquitto_property *props);
@@ -402,10 +402,6 @@ int mosquitto_loop_forever(struct mosquitto *mosq, int timeout, int max_packets)
 			case MOSQ_ERR_QUIC_NOT_INIT:
 #endif
 				return rc;
-#ifdef WITH_QUIC
-			case MOSQ_ERR_CONN_LOST:
-			case MOSQ_ERR_QUIC_HANDSHAKE:
-#endif
 			case MOSQ_ERR_ERRNO:
 
 				break;
@@ -460,7 +456,6 @@ int mosquitto_loop_misc(struct mosquitto *mosq)
 
 	return mosquitto__check_keepalive(mosq);
 }
-
 
 int mosquitto_loop_read(struct mosquitto *mosq, int max_packets)
 {

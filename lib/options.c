@@ -574,6 +574,18 @@ int mosquitto_int_option(struct mosquitto *mosq, enum mosq_opt_t option, int val
 #else
 			return MOSQ_ERR_NOT_SUPPORTED;
 #endif
+
+		case MOSQ_OPT_QUIC_STREAM_COUNT:
+#ifdef WITH_QUIC
+            if(value < 1 || value > 100){
+                return MOSQ_ERR_INVAL;
+            }
+            mosq->quic_stream_count = value;
+            break;
+#else
+            return MOSQ_ERR_NOT_SUPPORTED;
+#endif
+
 		default:
 			return MOSQ_ERR_INVAL;
 	}

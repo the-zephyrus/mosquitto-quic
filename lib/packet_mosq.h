@@ -47,10 +47,11 @@ int packet__write_varint(struct mosquitto__packet *packet, uint32_t word);
 unsigned int packet__varint_bytes(uint32_t word);
 
 #  ifdef WITH_QUIC
-int packet__read(struct mosq_quic_stream *stream, const uint8_t *buf, uint32_t buf_len, uint32_t *bytes_consumed);
-void packet__process_sent(struct mosq_quic_stream *stream, struct mosquitto__packet *packet);
+int packet__read(struct mosquitto *mosq, const uint8_t *buf, uint32_t buf_len, uint32_t *bytes_consumed);
+void packet__process_sent(struct mosquitto *mosq, struct mosquitto__packet *packet);
 #  else
 int packet__read(struct mosquitto *mosq);
 #  endif
+int packet__write_on_stream(struct mosquitto *mosq, struct mosq_quic_stream *stream);
 int packet__write(struct mosquitto *mosq);
 #endif

@@ -10,9 +10,14 @@
 
 #include "util_mosq.h"
 
+#define DEFAULT_SEND_BUFFER_SIZE       0x20000 // 128 KiB
 const QUIC_API_TABLE* msquic = NULL;
 HQUIC registration = NULL;
 HQUIC configuration = NULL;
+
+/*=============================================================================
+ * MsQuic Library Initialization and Configuration
+ *=============================================================================*/
 
 int msquic_init(void)
 {
@@ -112,54 +117,13 @@ int msquic_init_client(struct mosquitto *mosq)
     return MOSQ_ERR_SUCCESS;
 }
 
-static void
-msquic_stream_on_send_complete(
-    struct mosq_quic_stream *stream,
-    struct mosquitto__packet *packet
-    )
-{
-    int rc;
-    uint32_t bytes_send = packet->to_process;
-    packet->pos += bytes_send;
-    packet->to_process -= bytes_send;
-    stream->bytes_outstanding -= bytes_send ;
-    packet__process_sent(stream, packet);
-    rc = packet__write(stream->connection->client_ctx);
-    if(rc){
-        net__wakeup_loop(stream->connection->client_ctx, rc);
-    }
-}
-
-static void
-msquic_stream_on_receive(
-    struct mosq_quic_stream *stream, 
-    const QUIC_BUFFER* buffers, 
-    uint32_t buffer_count
-)
-{
-    const uint8_t* current_buf = NULL;
-    uint32_t current_buf_len = 0;
-    uint32_t bytes_consumed = 0;
-    int rc;
-
-    for (uint32_t i = 0; i < buffer_count; ++i) {
-        current_buf = buffers[i].Buffer;
-        current_buf_len = buffers[i].Length;
-
-        while (current_buf_len > 0) {
-            bytes_consumed = 0;
-            rc = packet__read(stream, current_buf, current_buf_len, &bytes_consumed);
-            if (rc) {
-                net__wakeup_loop(stream->connection->client_ctx, rc);
-            }
-            current_buf += bytes_consumed;
-            current_buf_len -= bytes_consumed;
-        }
-    }
-}
+/*=============================================================================
+ * MsQuic Stream Management and Event Handling
+ *=============================================================================*/
 
 static QUIC_STATUS 
 msquic_handle_stream_event(
+    struct mosquitto *mosq,
     struct mosq_quic_stream *stream,
     QUIC_STREAM_EVENT *event
 )
@@ -167,29 +131,50 @@ msquic_handle_stream_event(
     switch (event->Type) {
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
         struct mosquitto__packet * packet = (struct mosquitto__packet *)event->SEND_COMPLETE.ClientContext;
-        msquic_stream_on_send_complete(stream, packet);
+        uint32_t bytes_send = packet->to_process;
+        packet->pos += bytes_send;
+        packet->to_process -= bytes_send;
+        stream->bytes_outstanding -= bytes_send ;
+        packet__process_sent(mosq, packet);
+        int rc = packet__write_on_stream(mosq, stream);
+        if(rc){
+            net__wakeup_loop(mosq, rc);
+        }
         break;
     case QUIC_STREAM_EVENT_RECEIVE:
-        msquic_stream_on_receive(stream, event->RECEIVE.Buffers, event->RECEIVE.BufferCount);
+        const uint8_t* current_buf = NULL;
+        uint32_t current_buf_len = 0;
+        uint32_t bytes_consumed = 0;
+        for (uint32_t i = 0; i < event->RECEIVE.BufferCount; ++i) {
+            current_buf = event->RECEIVE.Buffers[i].Buffer;
+            current_buf_len = event->RECEIVE.Buffers[i].Length;
+            while (current_buf_len > 0) {
+                bytes_consumed = 0;
+                int rc = packet__read(mosq, current_buf, current_buf_len, &bytes_consumed);
+                if (rc) {
+                    net__wakeup_loop(mosq, rc);
+                }
+                current_buf += bytes_consumed;
+                current_buf_len -= bytes_consumed;
+            }
+        }
         break;
     case QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN:
         break;
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
         if (!event->SHUTDOWN_COMPLETE.AppCloseInProgress) {
+            CxPlatListEntryRemove(&stream->list_entry);
             msquic->StreamClose(stream->handle);
-            struct mosq_quic_stream *stream_cleanup = stream;
-            printf("msquic_handle_stream_event: stream_cleanup %p\n", stream_cleanup);
-            mosquitto__free(stream_cleanup);
-            
+            mosquitto__free(stream);
         }
         break;
     case QUIC_STREAM_EVENT_IDEAL_SEND_BUFFER_SIZE:
-        struct mosquitto *mosq = stream->connection->client_ctx;
+        struct mosquitto *mosq = stream->connection->mosq;
         if (!mosq->quic_use_send_buffering && stream->ideal_sendbuffer != event->IDEAL_SEND_BUFFER_SIZE.ByteCount) {
             stream->ideal_sendbuffer = event->IDEAL_SEND_BUFFER_SIZE.ByteCount;
-            int rc = packet__write(stream->connection->client_ctx);
+            int rc = packet__write_on_stream(mosq, stream);
             if (rc) {
-                net__wakeup_loop(stream->connection->client_ctx, rc);
+                net__wakeup_loop(mosq, rc);
             }
         }
         break;
@@ -203,7 +188,7 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _Function_class_(QUIC_STREAM_CALLBACK)
 QUIC_STATUS
 QUIC_API
-quic_client_stream_callback(
+msquic_client_stream_callback(
     _In_ HQUIC handle,
     _In_opt_ void* context,
     _Inout_ QUIC_STREAM_EVENT* event
@@ -211,10 +196,11 @@ quic_client_stream_callback(
 {
     UNUSED(handle);
     struct mosq_quic_stream *stream = (struct mosq_quic_stream *)context;
-    return msquic_handle_stream_event(stream, event);
+    struct mosquitto *mosq = stream->connection->mosq;
+    return msquic_handle_stream_event(mosq, stream, event);
 }
 
-static int quic_start_new_stream(struct mosq_quic_connection *connection)
+static int msquic_start_new_stream(struct mosq_quic_connection *connection)
 {
     if (!connection) {
         return MOSQ_ERR_INVAL;
@@ -224,75 +210,97 @@ static int quic_start_new_stream(struct mosq_quic_connection *connection)
         return MOSQ_ERR_QUIC_NOT_INIT;
     }
 
-    QUIC_STATUS status;
-    struct mosquitto *mosq = connection->client_ctx;
+    QUIC_STATUS status = QUIC_STATUS_SUCCESS;
+    struct mosquitto *mosq = connection->mosq;
+
     struct mosq_quic_stream *newstream;
-
-    if (!mosq) {
-        return MOSQ_ERR_INVAL;
-    }
-    if(!connection->handle) {
-        return MOSQ_ERR_NO_CONN;
-    }
-
-
-   if (connection->stream == NULL) {
-        newstream = mosquitto__calloc(1, sizeof(struct mosq_quic_stream));
-        if (!newstream) {
-            return MOSQ_ERR_NOMEM;
-        }
-    }else {
-        log__printf(mosq, MOSQ_LOG_ERR, "QUIC: Stream already exists");
-        return MOSQ_ERR_SUCCESS;
+    newstream = mosquitto__calloc(1, sizeof(struct mosq_quic_stream));
+    if (!newstream) {
+        return MOSQ_ERR_NOMEM;
     }
 
     newstream->handle = NULL; 
     newstream->connection = connection;
     newstream->bytes_outstanding = 0;
-    newstream->ideal_sendbuffer = PERF_DEFAULT_SEND_BUFFER_SIZE; 
-
+    newstream->ideal_sendbuffer = mosq->quic_use_send_buffering ? 
+                                  1 : DEFAULT_SEND_BUFFER_SIZE;
 
     if (QUIC_FAILED(status = msquic->StreamOpen(
             connection->handle,
             QUIC_STREAM_OPEN_FLAG_NONE,
-            quic_client_stream_callback,
+            msquic_client_stream_callback,
             newstream,
             &newstream->handle))) {
         log__printf(mosq, MOSQ_LOG_ERR, "Client %s StreamOpen failed [QUIC] (0x%x - %s)",
-            SAFE_PRINT(mosq->id),
-            status,
-            quic_status_to_string(status));
-        mosquitto__free(newstream);
-        return MOSQ_ERR_QUIC_API;
+            SAFE_PRINT(mosq->id),status,quic_status_to_string(status));
+        goto cleanup_stream;
     }
 
     if (QUIC_FAILED(status = msquic->StreamStart(
             newstream->handle,
             QUIC_STREAM_START_FLAG_NONE))) { 
         log__printf(mosq, MOSQ_LOG_ERR, "Client %s StreamStart failed [QUIC] (0x%x - %s)",
-            SAFE_PRINT(mosq->id),
-            status,
-            quic_status_to_string(status));
-        msquic->StreamClose(newstream->handle);
-        mosquitto__free(newstream);
-        return MOSQ_ERR_QUIC_API;
+            SAFE_PRINT(mosq->id),status,quic_status_to_string(status));
+        goto cleanup_stream;
     }
 
-    connection->stream = newstream;
+    CxPlatListInsertTail(&connection->stream_list_head, &newstream->list_entry);
+    return MOSQ_ERR_SUCCESS;
+
+cleanup_stream:
+    if(newstream->handle) {
+        msquic->StreamClose(newstream->handle);
+    }
+    mosquitto__free(newstream);
+    return MOSQ_ERR_QUIC_API;
+}
+
+int msquic_send(const struct mosq_quic_stream *stream, const void *buf, uint32_t count, void* client_context)
+{
+    if(!msquic) {
+        return MOSQ_ERR_QUIC_NOT_INIT;
+    }
+    QUIC_STATUS status = QUIC_STATUS_SUCCESS;
+    struct mosquitto *mosq = stream->connection->mosq;
+    QUIC_BUFFER quic_buffer;
+    quic_buffer.Buffer = (uint8_t*)buf;
+    quic_buffer.Length = count;
+
+    if(QUIC_FAILED(status = msquic->StreamSend(
+            stream->handle,
+            &quic_buffer,
+            1,
+            QUIC_SEND_FLAG_NONE,
+            client_context))) {
+        log__printf(mosq, MOSQ_LOG_ERR, "Client %s StreamSend failed [QUIC] (0x%x - %s)",
+            SAFE_PRINT(mosq->id), status, quic_status_to_string(status));
+        return MOSQ_ERR_QUIC_API;
+    }
     return MOSQ_ERR_SUCCESS;
 }
 
+/*=============================================================================
+ * MsQuic Connection Management and Event Handling
+ *=============================================================================*/
 static QUIC_STATUS 
 msquic_handle_connection_event(
+    struct mosquitto *mosq,
     struct mosq_quic_connection *connection,
     QUIC_CONNECTION_EVENT *event
 )
 {
-    struct mosquitto *mosq = connection->client_ctx;
     switch (event->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED:
-        mosquitto__set_state(mosq, mosq_cs_connected);
-        int rc = quic_start_new_stream(connection);
+        int rc = 0;
+        for (int i = 0; i < mosq->quic_stream_count; ++i) {
+            rc = msquic_start_new_stream(connection);
+            if(rc){ 
+                break;
+            }
+        }
+        if(!rc){
+            mosquitto__set_state(mosq, mosq_cs_connected);
+        }
         net__wakeup_loop(mosq, rc);
         break;
 
@@ -303,36 +311,35 @@ msquic_handle_connection_event(
         break;
 
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
-        if (!event->SHUTDOWN_COMPLETE.AppCloseInProgress) {
+        if(!event->SHUTDOWN_COMPLETE.AppCloseInProgress) {
             msquic->ConnectionClose(connection->handle);
             connection->handle = NULL;
         }
         if(event->SHUTDOWN_COMPLETE.HandshakeCompleted) {
-            net__wakeup_loop(mosq, MOSQ_ERR_CONN_LOST);
+            log__printf(mosq, MOSQ_LOG_INFO, "Client %s Connection shutdown complete [QUIC]",
+                SAFE_PRINT(mosq->id));
         }else{
-            net__wakeup_loop(mosq, MOSQ_ERR_QUIC_HANDSHAKE);
+            log__printf(mosq, MOSQ_LOG_ERR, "Client %s Handshake failed [QUIC]",
+                SAFE_PRINT(mosq->id));
         }
+        net__wakeup_loop(mosq, MOSQ_ERR_QUIC_CONNECTION_SHUTDOWN);
         break;
-    case QUIC_CONNECTION_EVENT_RESUMPTION_TICKET_RECEIVED:
-        mosquitto__free(mosq->quic_resumption_ticket);
-        mosq->quic_resumption_ticket = NULL;
 
+    case QUIC_CONNECTION_EVENT_RESUMPTION_TICKET_RECEIVED:
         uint32_t ticket_length = event->RESUMPTION_TICKET_RECEIVED.ResumptionTicketLength;
         const uint8_t* ticket_data = event->RESUMPTION_TICKET_RECEIVED.ResumptionTicket;
-
-        mosq->quic_resumption_ticket = (QUIC_BUFFER*)mosquitto__malloc(
-            sizeof(QUIC_BUFFER) + ticket_length);
-
-        if (mosq->quic_resumption_ticket) {
+        mosquitto__free(mosq->quic_resumption_ticket);
+        mosq->quic_resumption_ticket = (QUIC_BUFFER*)mosquitto__malloc(sizeof(QUIC_BUFFER) + ticket_length);
+        if(mosq->quic_resumption_ticket) {
             mosq->quic_resumption_ticket->Buffer = (uint8_t*)(mosq->quic_resumption_ticket + 1);
             mosq->quic_resumption_ticket->Length = ticket_length;
-            
             memcpy(mosq->quic_resumption_ticket->Buffer, ticket_data, ticket_length);
         }else{
+            log__printf(mosq, MOSQ_LOG_ERR, "Client %s Failed to allocate memory for resumption ticket [QUIC]",
+                SAFE_PRINT(mosq->id));
             net__wakeup_loop(mosq, MOSQ_ERR_NOMEM);
         }
         break;
-
     default:
         break;
     }
@@ -352,20 +359,21 @@ msquic_client_connection_callback(
 {
     UNUSED(handle);
     struct mosq_quic_connection *connection = (struct mosq_quic_connection *)context;
-    return msquic_handle_connection_event(connection, event);
+    struct mosquitto *mosq = connection->mosq;
+    return msquic_handle_connection_event(mosq, connection, event);
 }
 
 int msquic_start_connection(struct mosq_quic_connection *connection, const char *host, uint16_t port, const char *bind_address)
 {
-    if(!msquic || !registration || !configuration) {
+    if(!msquic) {
         return MOSQ_ERR_QUIC_NOT_INIT;
     }
 
     QUIC_STATUS status = QUIC_STATUS_SUCCESS;
-    struct mosquitto *mosq = connection->client_ctx;
+    struct mosquitto *mosq = connection->mosq;
     HQUIC connection_handle = NULL;
     
-    if (QUIC_FAILED(status = msquic->ConnectionOpen(
+    if(QUIC_FAILED(status = msquic->ConnectionOpen(
             registration,
             msquic_client_connection_callback,
             connection,
@@ -377,25 +385,25 @@ int msquic_start_connection(struct mosq_quic_connection *connection, const char 
 
     if(bind_address) {
         QUIC_ADDR local_addr = {0};
-        if (!convert_arg_to_address(bind_address, 0, &local_addr)){
+        if(!convert_arg_to_address(bind_address, 0, &local_addr)){
             log__printf(mosq, MOSQ_LOG_WARNING, "Client %s Invalid bind address format [QUIC] (%s)",
                 SAFE_PRINT(mosq->id), bind_address);
         }else{
             BOOLEAN share_enabled = TRUE;
-            if(QUIC_FAILED(status = msquic->SetParam(
-                connection_handle,
-                QUIC_PARAM_CONN_SHARE_UDP_BINDING,
-                sizeof(share_enabled),
-                &share_enabled))) {
+            if (QUIC_FAILED(status = msquic->SetParam(
+                    connection_handle,
+                    QUIC_PARAM_CONN_SHARE_UDP_BINDING,
+                    sizeof(share_enabled),
+                    &share_enabled))) {
                 log__printf(mosq, MOSQ_LOG_ERR, "Client %s SetParam failed [QUIC] (0x%x - %s)",
                     SAFE_PRINT(mosq->id), status, quic_status_to_string(status));
                 goto Error;
             }
-            if(QUIC_FAILED(status = msquic->SetParam(
-                connection_handle,
-                QUIC_PARAM_CONN_LOCAL_ADDRESS,
-                sizeof(local_addr),
-                &local_addr))) {
+            if (QUIC_FAILED(status = msquic->SetParam(
+                    connection_handle,
+                    QUIC_PARAM_CONN_LOCAL_ADDRESS,
+                    sizeof(local_addr),
+                    &local_addr))) {
                 log__printf(mosq, MOSQ_LOG_ERR, "Client %s SetParam failed [QUIC] (0x%x - %s)",
                     SAFE_PRINT(mosq->id), status, quic_status_to_string(status));
                 goto Error;
@@ -403,8 +411,8 @@ int msquic_start_connection(struct mosq_quic_connection *connection, const char 
         }
     }
 
-    if (mosq->quic_resumption_ticket) {
-        if (QUIC_FAILED(status = msquic->SetParam(
+    if(mosq->quic_resumption_ticket) {
+        if(QUIC_FAILED(status = msquic->SetParam(
                 connection_handle,
                 QUIC_PARAM_CONN_RESUMPTION_TICKET,
                 mosq->quic_resumption_ticket->Length,
@@ -430,7 +438,7 @@ int msquic_start_connection(struct mosq_quic_connection *connection, const char 
     return MOSQ_ERR_SUCCESS;
 
 Error:
-    if (connection_handle != NULL) {
+    if(connection_handle != NULL) {
         msquic->ConnectionClose(connection_handle);
     }
     return MOSQ_ERR_QUIC_API;
@@ -450,33 +458,4 @@ int msquic_shutdown_connection(const struct mosq_quic_connection *connection)
     }
     return MOSQ_ERR_SUCCESS;
 }
-
-int msquic_send(const struct mosq_quic_stream *stream, const void *buf, uint32_t count, void* client_context)
-{
-    if(!msquic) {
-        return MOSQ_ERR_QUIC_NOT_INIT;
-    }
-
-    struct mosquitto *mosq = stream->connection->client_ctx;
-    
-    QUIC_BUFFER quic_buffer;
-    quic_buffer.Buffer = (uint8_t*)buf;
-    quic_buffer.Length = count;
-
-    QUIC_STATUS status = msquic->StreamSend(
-        stream->handle,
-        &quic_buffer,              
-        1,                 
-        QUIC_SEND_FLAG_NONE, 
-        client_context       
-    );
-
-    if (QUIC_FAILED(status)) {
-        log__printf(mosq, MOSQ_LOG_ERR, "Client %s StreamSend failed [QUIC] (0x%x - %s)",
-            SAFE_PRINT(mosq->id), status, quic_status_to_string(status));
-        return MOSQ_ERR_QUIC_API;
-    }
-    return MOSQ_ERR_SUCCESS;
-}
-
 #endif

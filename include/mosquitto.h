@@ -125,7 +125,7 @@ enum mosq_err_t {
 	MOSQ_ERR_ALREADY_EXISTS = 31,
 	MOSQ_ERR_QUIC_NOT_INIT = 32,
 	MOSQ_ERR_QUIC_API = 33,
-	MOSQ_ERR_QUIC_HANDSHAKE = 34,
+	MOSQ_ERR_QUIC_CONNECTION_SHUTDOWN = 34,
 };
 
 /* Enum: mosq_opt_t
@@ -151,6 +151,7 @@ enum mosq_opt_t {
 	MOSQ_OPT_QUIC_ALPN = 14,
 	MOSQ_OPT_QUIC_RESUMPTION_TICKET = 15,
 	MOSQ_OPT_QUIC_SEND_BUFFERING = 16,
+	MOSQ_OPT_QUIC_STREAM_COUNT = 17,
 };
 
 
@@ -1582,6 +1583,10 @@ libmosq_EXPORT int mosquitto_opts_set(struct mosquitto *mosq, enum mosq_opt_t op
  *
  *  MOSQ_OPT_QUIC_SEND_BUFFERING - Set to 1 to enable send buffering for QUIC
  *            connections, 0 to disable. Defaults to 0 (disabled).
+ *            This option is only effective if QUIC support is compiled in.
+ *
+ *  MOSQ_OPT_QUIC_STREAM_COUNT - Set the number of QUIC streams to create
+ *            per connection. Value must be between 1 and 100. Defaults to 1.
  *            This option is only effective if QUIC support is compiled in.
  */
 libmosq_EXPORT int mosquitto_int_option(struct mosquitto *mosq, enum mosq_opt_t option, int value);

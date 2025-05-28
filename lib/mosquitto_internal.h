@@ -24,6 +24,7 @@ Contributors:
 
 #ifdef WITH_QUIC
 #  include "msquic.h"
+#  include "quic_platform.h"
 #endif
 
 #ifdef WIN32
@@ -216,36 +217,33 @@ struct mosquitto_msg_data{
 
 #ifdef WITH_QUIC
 
-#define PERF_DEFAULT_SEND_BUFFER_SIZE       0x20000
-
 struct mosq_quic_stream {
     HQUIC handle;
     struct mosq_quic_connection *connection;
     uint64_t bytes_outstanding;
     uint64_t ideal_sendbuffer;
-	struct mosq_quic_stream *next;
-	struct mosq_quic_stream *prev;
+	CXPLAT_LIST_ENTRY list_entry;
 };
 
 struct mosq_quic_connection {
 	HQUIC handle;
-	struct mosquitto *client_ctx;
-	struct mosq_quic_stream *stream;
+	struct mosquitto *mosq;
+	CXPLAT_LIST_ENTRY stream_list_head;
 };
 #endif
 
 struct mosquitto {
-#ifdef WITH_QUIC
-	struct mosq_quic_connection quic_connection;
-#else
-#  if defined(WITH_BROKER) && defined(WITH_EPOLL)
+#if defined(WITH_BROKER) && defined(WITH_EPOLL)
 	/* This *must* be the first element in the struct. */
 	int ident;
-#  endif
+#endif
+#ifndef WITH_QUIC
 	mosq_sock_t sock;
-#  if defined(__GLIBC__) && defined(WITH_ADNS)
+#else
+	struct mosq_quic_connection quic_connection;
+#endif
+#if defined(__GLIBC__) && defined(WITH_ADNS)
 	struct gaicb *adns; /* For getaddrinfo_a */
-#  endif
 #endif
 #ifndef WITH_BROKER
 	mosq_sock_t sockpairR, sockpairW;
@@ -272,7 +270,15 @@ struct mosquitto {
 	int out_packet_count;
 	uint32_t will_delay_interval;
 	time_t will_delay_time;
-
+#ifdef WITH_QUIC
+	char *quic_app_name;
+	QUIC_EXECUTION_PROFILE quic_execution_profile;
+	char *quic_alpn;
+    bool quic_insecure;
+	QUIC_BUFFER *quic_resumption_ticket;
+    uint8_t quic_use_send_buffering;
+	int quic_stream_count;
+#endif
 #ifdef WITH_TLS
 	SSL *ssl;
 	SSL_CTX *ssl_ctx;
@@ -299,15 +305,6 @@ struct mosquitto {
 	enum mosquitto__keyform tls_keyform;
 #endif
 	bool want_write;
-
-#ifdef WITH_QUIC
-	char *quic_app_name;
-	QUIC_EXECUTION_PROFILE quic_execution_profile;
-	char *quic_alpn;
-    bool quic_insecure;
-	QUIC_BUFFER *quic_resumption_ticket;
-    uint8_t quic_use_send_buffering;
-#endif
 
 #if defined(WITH_THREADING) && !defined(WITH_BROKER)
 	pthread_mutex_t callback_mutex;
