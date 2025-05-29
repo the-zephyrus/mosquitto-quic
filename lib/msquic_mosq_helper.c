@@ -1,3 +1,4 @@
+#ifdef WITH_QUIC
 #include "msquic_mosq_helper.h"
 #include "msquic.h"
 #include "quic_platform.h"
@@ -126,5 +127,6 @@ convert_arg_to_address(
     }
     return QuicAddrFromString(Arg, Port, Address);
 }
+#endif // WITH_QUIC
 
 

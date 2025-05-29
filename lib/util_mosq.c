@@ -80,11 +80,11 @@ int mosquitto__check_keepalive(struct mosquitto *mosq)
 #if defined(WITH_BROKER) && defined(WITH_BRIDGE)
 	/* Check if a lazy bridge should be timed out due to idle. */
 	if(mosq->bridge && mosq->bridge->start_type == bst_lazy
-				&& net__connection_valid(mosq)
+				&& net__is_connected(mosq)
 				&& now - mosq->next_msg_out - mosq->keepalive >= mosq->bridge->idle_timeout){
 
 		log__printf(NULL, MOSQ_LOG_NOTICE, "Bridge connection %s has exceeded idle timeout, disconnecting.", mosq->id);
-		net__shutdown_connection(mosq);
+		net__disconnect(mosq);
 
 		return MOSQ_ERR_SUCCESS;
 	}
@@ -95,7 +95,7 @@ int mosquitto__check_keepalive(struct mosquitto *mosq)
 	last_msg_in = mosq->last_msg_in;
 	COMPAT_pthread_mutex_unlock(&mosq->msgtime_mutex);
 
-    if (mosq->keepalive && net__connection_valid(mosq) &&
+    if (mosq->keepalive && net__is_connected(mosq) &&
         (now >= next_msg_out || now - last_msg_in >= mosq->keepalive)) {
 		state = mosquitto__get_state(mosq);
 		if(state == mosq_cs_active && mosq->ping_t == 0){
@@ -112,9 +112,9 @@ int mosquitto__check_keepalive(struct mosquitto *mosq)
 				context__send_will(mosq);
 			}
 #  endif
-			net__shutdown_connection(mosq);
+			net__disconnect(mosq);
 #else
-			net__shutdown_connection(mosq);
+			net__disconnect(mosq);
 			state = mosquitto__get_state(mosq);
 			if(state == mosq_cs_disconnecting){
 				rc = MOSQ_ERR_SUCCESS;

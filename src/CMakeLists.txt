@@ -35,6 +35,7 @@ set (MOSQ_SRCS
 	mux.c mux.h mux_epoll.c mux_poll.c
 	net.c
 	../lib/net_mosq_ocsp.c ../lib/net_mosq.c ../lib/net_mosq.h
+	../lib/msquic_mosq.c ../lib/msquic_mosq.h ../lib/msquic_mosq_helper.c ../lib/msquic_mosq_helper.h
 	../lib/packet_datatypes.c
 	../lib/packet_mosq.c ../lib/packet_mosq.h
 	password_mosq.c password_mosq.h
@@ -77,26 +78,30 @@ if (WITH_BUNDLED_DEPS)
 	include_directories(${mosquitto_SOURCE_DIR} ${mosquitto_SOURCE_DIR}/deps)
 endif (WITH_BUNDLED_DEPS)
 
+if(WITH_QUIC)
+	set(MOSQ_LIBS ${MOSQ_LIBS} inc warnings msquic base_link)
+endif()
+
 find_path(HAVE_SYS_EPOLL_H sys/epoll.h)
-if (HAVE_SYS_EPOLL_H)
+if (HAVE_SYS_EPOLL_H AND NOT WITH_QUIC)
 	add_definitions("-DWITH_EPOLL")
 endif()
 
 option(INC_BRIDGE_SUPPORT
 	"Include bridge support for connecting to other brokers?" ON)
-if (INC_BRIDGE_SUPPORT)
+if (INC_BRIDGE_SUPPORT AND NOT WITH_QUIC)
 	set (MOSQ_SRCS ${MOSQ_SRCS} bridge.c)
 	add_definitions("-DWITH_BRIDGE")
-endif (INC_BRIDGE_SUPPORT)
+endif (INC_BRIDGE_SUPPORT AND NOT WITH_QUIC)
 
 
 option(USE_LIBWRAP
 	"Include tcp-wrappers support?" OFF)
 
-if (USE_LIBWRAP)
+if (USE_LIBWRAP AND NOT WITH_QUIC)
 	set (MOSQ_LIBS ${MOSQ_LIBS} wrap)
 	add_definitions("-DWITH_WRAP")
-endif (USE_LIBWRAP)
+endif (USE_LIBWRAP AND NOT WITH_QUIC)
 
 option(INC_DB_UPGRADE
 	"Include database upgrade support? (recommended)" ON)
@@ -134,7 +139,7 @@ endif (CMAKE_SYSTEM_NAME STREQUAL Linux)
 
 option(WITH_WEBSOCKETS "Include websockets support?" OFF)
 option(STATIC_WEBSOCKETS "Use the static libwebsockets library?" OFF)
-if (WITH_WEBSOCKETS)
+if (WITH_WEBSOCKETS AND NOT WITH_QUIC)
 	find_package(libwebsockets)
 	add_definitions("-DWITH_WEBSOCKETS")
 endif (WITH_WEBSOCKETS)
@@ -151,17 +156,17 @@ endif (WIN32 OR CYGWIN)
 
 add_definitions (-DWITH_BROKER)
 
-if (WITH_DLT)
+if (WITH_DLT AND NOT WITH_QUIC)
     message(STATUS "DLT_LIBDIR = ${DLT_LIBDIR}")
     link_directories(${DLT_LIBDIR})
     set (MOSQ_LIBS ${MOSQ_LIBS} ${DLT_LIBRARIES})
-endif (WITH_DLT)
+endif (WITH_DLT AND NOT WITH_QUIC)
 
 set (MOSQ_LIBS ${MOSQ_LIBS} ${OPENSSL_LIBRARIES})
 # Check for getaddrinfo_a
 include(CheckLibraryExists)
 check_library_exists(anl getaddrinfo_a  "" HAVE_GETADDRINFO_A)
-if (HAVE_GETADDRINFO_A AND WITH_ADNS)
+if (HAVE_GETADDRINFO_A AND WITH_ADNS AND NOT WITH_QUIC)
 	add_definitions("-DWITH_ADNS")
 	add_definitions(-DHAVE_GETADDRINFO_A)
 	set (MOSQ_LIBS ${MOSQ_LIBS} anl)
@@ -192,7 +197,7 @@ if (WIN32)
 	set (MOSQ_LIBS ${MOSQ_LIBS} ws2_32)
 endif (WIN32)
 
-if (WITH_WEBSOCKETS)
+if (WITH_WEBSOCKETS AND NOT WITH_QUIC)
 	if (STATIC_WEBSOCKETS)
 		set (MOSQ_LIBS ${MOSQ_LIBS} websockets_static)
 		if (WIN32)
@@ -202,7 +207,7 @@ if (WITH_WEBSOCKETS)
 	else (STATIC_WEBSOCKETS)
 		set (MOSQ_LIBS ${MOSQ_LIBS} websockets_shared)
 	endif (STATIC_WEBSOCKETS)
-endif (WITH_WEBSOCKETS)
+endif (WITH_WEBSOCKETS AND NOT WITH_QUIC)
 
 add_executable(mosquitto ${MOSQ_SRCS})
 target_link_libraries(mosquitto ${MOSQ_LIBS})

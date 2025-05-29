@@ -140,7 +140,8 @@ enum mosquitto__transport {
 	mosq_t_invalid = 0,
 	mosq_t_tcp = 1,
 	mosq_t_ws = 2,
-	mosq_t_sctp = 3
+	mosq_t_sctp = 3,
+	mosq_t_quic = 4,
 };
 
 
@@ -216,7 +217,6 @@ struct mosquitto_msg_data{
 };
 
 #ifdef WITH_QUIC
-
 struct mosq_quic_stream {
     HQUIC handle;
     struct mosq_quic_connection *connection;
@@ -237,19 +237,19 @@ struct mosquitto {
 	/* This *must* be the first element in the struct. */
 	int ident;
 #endif
-#ifndef WITH_QUIC
 	mosq_sock_t sock;
-#else
+#ifdef WITH_QUIC
 	struct mosq_quic_connection quic_connection;
-#endif
-#if defined(__GLIBC__) && defined(WITH_ADNS)
-	struct gaicb *adns; /* For getaddrinfo_a */
 #endif
 #ifndef WITH_BROKER
 	mosq_sock_t sockpairR, sockpairW;
 #endif
 	uint32_t maximum_packet_size;
+#if defined(__GLIBC__) && defined(WITH_ADNS)
+	struct gaicb *adns; /* For getaddrinfo_a */
+#endif
 	enum mosquitto__protocol protocol;
+	enum mosquitto__transport transport;
 	char *address;
 	char *id;
 	char *username;
@@ -332,15 +332,14 @@ struct mosquitto {
 	struct mosquitto__client_sub **subs;
 	char *auth_method;
 	int sub_count;
-#  ifndef WITH_QUIC
-#    ifndef WITH_EPOLL
+#  ifndef WITH_EPOLL
 	int pollfd_index;
-#    endif
-#    ifdef WITH_WEBSOCKETS
-	struct lws *wsi;
-#    endif
-	bool ws_want_write;
 #  endif
+#  ifdef WITH_WEBSOCKETS
+	struct lws *wsi;
+#  endif
+	bool ws_want_write;
+
 	bool assigned_id;
 #else
 #  ifdef WITH_SOCKS
@@ -390,16 +389,12 @@ struct mosquitto {
 
 #ifdef WITH_BROKER
 	UT_hash_handle hh_id;
-#  ifndef WITH_QUIC
 	UT_hash_handle hh_sock;
-#  endif
 	struct mosquitto *for_free_next;
 	struct session_expiry_list *expiry_list_item;
 	uint16_t remote_port;
 #endif
-#ifndef WITH_QUIC
 	uint32_t events;
-#endif
 };
 
 #define STREMPTY(str) (str[0] == '\0')

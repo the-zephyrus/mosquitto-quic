@@ -55,9 +55,9 @@ int send__publish(struct mosquitto *mosq, uint16_t mid, const char *topic, uint3
 	assert(mosq);
 
 #if defined(WITH_BROKER) && defined(WITH_WEBSOCKETS)
-	if(!net__connection_valid(mosq) && !mosq->wsi) return MOSQ_ERR_NO_CONN;
+	if(!net__is_connected(mosq) && !mosq->wsi) return MOSQ_ERR_NO_CONN;
 #else
-	if(!net__connection_valid(mosq)) return MOSQ_ERR_NO_CONN;
+	if(!net__is_connected(mosq)) return MOSQ_ERR_NO_CONN;
 #endif
 
 	if(!mosq->retain_available){

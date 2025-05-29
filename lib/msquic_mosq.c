@@ -135,8 +135,8 @@ msquic_handle_stream_event(
         packet->pos += bytes_send;
         packet->to_process -= bytes_send;
         stream->bytes_outstanding -= bytes_send ;
-        packet__process_sent(mosq, packet);
-        int rc = packet__write_on_stream(mosq, stream);
+        packet__process_send(mosq, packet);
+        int rc = packet__write_quic_stream(mosq, stream);
         if(rc){
             net__wakeup_loop(mosq, rc);
         }
@@ -150,7 +150,7 @@ msquic_handle_stream_event(
             current_buf_len = event->RECEIVE.Buffers[i].Length;
             while (current_buf_len > 0) {
                 bytes_consumed = 0;
-                int rc = packet__read(mosq, current_buf, current_buf_len, &bytes_consumed);
+                int rc = packet__read_quic(mosq, current_buf, current_buf_len, &bytes_consumed);
                 if (rc) {
                     net__wakeup_loop(mosq, rc);
                 }
@@ -172,7 +172,7 @@ msquic_handle_stream_event(
         struct mosquitto *mosq = stream->connection->mosq;
         if (!mosq->quic_use_send_buffering && stream->ideal_sendbuffer != event->IDEAL_SEND_BUFFER_SIZE.ByteCount) {
             stream->ideal_sendbuffer = event->IDEAL_SEND_BUFFER_SIZE.ByteCount;
-            int rc = packet__write_on_stream(mosq, stream);
+            int rc = packet__write_quic_stream(mosq, stream);
             if (rc) {
                 net__wakeup_loop(mosq, rc);
             }

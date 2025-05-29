@@ -225,8 +225,7 @@ int packet__check_oversize(struct mosquitto *mosq, uint32_t remaining_length)
 }
 
 #ifdef WITH_QUIC
-
-void packet__process_sent(struct mosquitto *mosq, struct mosquitto__packet *packet)
+void packet__process_send(struct mosquitto *mosq, struct mosquitto__packet *packet)
 {
 	if(!mosq || !packet){
 		return;
@@ -272,7 +271,7 @@ void packet__process_sent(struct mosquitto *mosq, struct mosquitto__packet *pack
 #endif
 }
 
-int packet__write_on_stream(struct mosquitto *mosq, struct mosq_quic_stream *stream)
+int packet__write_quic_stream(struct mosquitto *mosq, struct mosq_quic_stream *stream)
 {
 	uint32_t bytes_to_send;
 	struct mosquitto__packet *packet;
@@ -292,7 +291,7 @@ int packet__write_on_stream(struct mosquitto *mosq, struct mosq_quic_stream *str
 	while(mosq->current_out_packet && stream->bytes_outstanding < stream->ideal_sendbuffer){
 		packet = mosq->current_out_packet;
 		bytes_to_send = packet->to_process;
-		int rc = net__write(stream, &(packet->payload[packet->pos]), 
+		int rc = net__quic_stream_send(stream, &(packet->payload[packet->pos]), 
 						bytes_to_send, packet);
 		if(rc){
 			COMPAT_pthread_mutex_unlock(&mosq->current_out_packet_mutex);
@@ -342,14 +341,9 @@ static struct mosq_quic_stream* select_best_stream(struct mosquitto *mosq)
     return best_stream;
 }
 
-int packet__write(struct mosquitto *mosq)
+static int packet__write_quic(struct mosquitto *mosq)
 {
 	enum mosquitto_client_state state;
-
-	if (!mosq) return MOSQ_ERR_INVAL;
-
-	if(!net__connection_valid(mosq)) return MOSQ_ERR_NO_CONN;
-
 	state = mosquitto__get_state(mosq);
 	if(state == mosq_cs_connect_pending){
 		return MOSQ_ERR_SUCCESS;
@@ -363,7 +357,7 @@ int packet__write(struct mosquitto *mosq)
 		if(!stream) {
 			return MOSQ_ERR_SUCCESS;
 		}
-		int rc = packet__write_on_stream(mosq, stream);
+		int rc = packet__write_quic_stream(mosq, stream);
 		if (rc) {
 			return rc;
 		}
@@ -371,8 +365,7 @@ int packet__write(struct mosquitto *mosq)
     return MOSQ_ERR_SUCCESS;
 }
 
-
-int packet__read(struct mosquitto *mosq, const uint8_t *buf, uint32_t buf_len, uint32_t *bytes_consumed)
+int packet__read_quic(struct mosquitto *mosq, const uint8_t *buf, uint32_t buf_len, uint32_t *bytes_consumed)
 {
     if(!mosq || !buf || !bytes_consumed){
         return MOSQ_ERR_INVAL;
@@ -381,6 +374,14 @@ int packet__read(struct mosquitto *mosq, const uint8_t *buf, uint32_t buf_len, u
 	uint8_t byte;
     int rc = 0;
     *bytes_consumed = 0;
+
+/*may be wrong*/
+	enum mosquitto_client_state state;
+
+	state = mosquitto__get_state(mosq);
+	if(state == mosq_cs_connect_pending){
+		return MOSQ_ERR_SUCCESS;
+	}
 
     /* This gets called when the caller provides data in 'buf'.
      * What we do depends on what data we already have (state in mosq->in_packet).
@@ -535,17 +536,13 @@ int packet__read(struct mosquitto *mosq, const uint8_t *buf, uint32_t buf_len, u
 
     return rc;
 }
+#endif
 
-#else
-
-int packet__write(struct mosquitto *mosq)
+static int packet__write_socket(struct mosquitto *mosq)
 {
 	ssize_t write_length;
 	struct mosquitto__packet *packet;
 	enum mosquitto_client_state state;
-
-	if(!mosq) return MOSQ_ERR_INVAL;
-	if(mosq->sock == INVALID_SOCKET) return MOSQ_ERR_NO_CONN;
 
 	COMPAT_pthread_mutex_lock(&mosq->current_out_packet_mutex);
 	COMPAT_pthread_mutex_lock(&mosq->out_packet_mutex);
@@ -667,6 +664,20 @@ int packet__write(struct mosquitto *mosq)
 	return MOSQ_ERR_SUCCESS;
 }
 
+int packet__write(struct mosquitto *mosq)
+{	
+	if(!mosq) return MOSQ_ERR_INVAL;
+	if(!net__is_connected(mosq)) return MOSQ_ERR_NO_CONN;
+
+#ifdef WITH_QUIC
+	if(mosq->transport == mosq_t_quic){
+		return packet__write_quic(mosq);
+	}else
+#endif
+	{
+		return packet__write_socket(mosq);
+	}
+}
 
 int packet__read(struct mosquitto *mosq)
 {
@@ -893,4 +904,3 @@ int packet__read(struct mosquitto *mosq)
 	return rc;
 }
 
-#endif

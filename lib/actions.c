@@ -190,7 +190,7 @@ int mosquitto_subscribe_multiple(struct mosquitto *mosq, int *mid, int sub_count
 	if(qos < 0 || qos > 2) return MOSQ_ERR_INVAL;
 	if((options & 0x30) == 0x30 || (options & 0xC0) != 0) return MOSQ_ERR_INVAL;
 
-	if(!net__connection_valid(mosq)) return MOSQ_ERR_NO_CONN;
+	if(!net__is_connected(mosq)) return MOSQ_ERR_NO_CONN;
 
 	if(properties){
 		if(properties->client_generated){
@@ -247,7 +247,7 @@ int mosquitto_unsubscribe_multiple(struct mosquitto *mosq, int *mid, int sub_cou
 
 	if(!mosq) return MOSQ_ERR_INVAL;
 	if(mosq->protocol != mosq_p_mqtt5 && properties) return MOSQ_ERR_NOT_SUPPORTED;
-	if(!net__connection_valid(mosq)) return MOSQ_ERR_NO_CONN;
+	if(!net__is_connected(mosq)) return MOSQ_ERR_NO_CONN;
 
 	if(properties){
 		if(properties->client_generated){

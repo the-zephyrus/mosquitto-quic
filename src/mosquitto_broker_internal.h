@@ -30,6 +30,10 @@ Contributors:
 #  endif
 #endif
 
+#ifdef WITH_QUIC
+#  include "msquic.h"
+#endif
+
 #include "mosquitto_internal.h"
 #include "mosquitto_broker.h"
 #include "mosquitto_plugin.h"

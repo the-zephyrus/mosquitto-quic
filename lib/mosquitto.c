@@ -160,10 +160,10 @@ int mosquitto_reinitialise(struct mosquitto *mosq, const char *id, bool clean_st
 		mosq->userdata = mosq;
 	}
 	mosq->protocol = mosq_p_mqtt311;
+	mosq->transport = mosq_t_tcp;
 	
-#ifndef WITH_QUIC
 	mosq->sock = INVALID_SOCKET;
-#else
+#ifdef WITH_QUIC
 	mosq->quic_connection.handle = NULL;
 	mosq->quic_connection.mosq = mosq;
 	CxPlatListInitializeHead(&mosq->quic_connection.stream_list_head);
@@ -286,8 +286,8 @@ void mosquitto__destroy(struct mosquitto *mosq)
 	}
 #endif
 
-	if(net__connection_valid(mosq)){
-		net__shutdown_connection(mosq);
+	if(net__is_connected(mosq)){
+		net__disconnect(mosq);
 	}
 
 	message__cleanup_all(mosq);

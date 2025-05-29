@@ -20,7 +20,9 @@ Contributors:
 #include "config.h"
 
 #ifndef WIN32
+#ifndef _GNU_SOURCE
 #  define _GNU_SOURCE
+#endif
 #endif
 
 #ifndef WIN32

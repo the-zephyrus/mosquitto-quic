@@ -19,8 +19,6 @@ Contributors:
 #ifndef MUX_H
 #define MUX_H
 
-#ifndef WITH_QUIC
-
 #include "mosquitto_broker_internal.h"
 
 int mux_epoll__init(struct mosquitto__listener_sock *listensock, int listensock_count);
@@ -38,7 +36,5 @@ int mux_poll__add_in(struct mosquitto *context);
 int mux_poll__delete(struct mosquitto *context);
 int mux_poll__handle(struct mosquitto__listener_sock *listensock, int listensock_count);
 int mux_poll__cleanup(void);
-
-#endif
 
 #endif

@@ -16,7 +16,6 @@ Contributors:
    Roger Light - initial implementation and documentation.
    Tatsuzo Osawa - Add epoll.
 */
-#ifndef WITH_QUIC
 
 #include "config.h"
 
@@ -305,6 +304,4 @@ static void loop_handle_reads_writes(struct mosquitto *context, uint32_t events)
 		}
 	}
 }
-#endif
-
 #endif

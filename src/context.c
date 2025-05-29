@@ -150,7 +150,7 @@ void context__cleanup(struct mosquitto *context, bool force_free)
 	mosquitto__free(context->password);
 	context->password = NULL;
 
-	net__shutdown_connection(context);
+	net__disconnect(context);
 
 	if(force_free){
 		sub__clean_session(context);
@@ -223,7 +223,7 @@ void context__disconnect(struct mosquitto *context)
 
 	context__send_will(context);
 
-	net__shutdown_connection(context);
+	net__disconnect(context);
 
 #ifdef WITH_BRIDGE
 	if(context->bridge == NULL)

@@ -11,7 +11,8 @@
                 "CMAKE_C_COMPILER": "/usr/bin/gcc",
                 "CMAKE_CXX_COMPILER": "/usr/bin/g++",
                 "CMAKE_BUILD_TYPE": "Debug",
-                "WITH_QUIC": "OFF"
+                "WITH_QUIC": "OFF",
+                "WITH_BROKER": "ON"
             }
         },
         {
@@ -37,7 +38,8 @@
                 "CMAKE_C_COMPILER": "/usr/bin/gcc",
                 "CMAKE_CXX_COMPILER": "/usr/bin/g++",
                 "CMAKE_BUILD_TYPE": "Debug",
-                "WITH_QUIC": "ON"
+                "WITH_QUIC": "ON",
+                "WITH_BROKER": "ON"
             }
         },
         {

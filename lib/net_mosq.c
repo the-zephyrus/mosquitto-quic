@@ -15,6 +15,7 @@ SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
 Contributors:
    Roger Light - initial implementation and documentation.
 */
+
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -73,20 +74,18 @@ Contributors:
 #  include "read_handle.h"
 #endif
 
-#ifndef WITH_QUIC
-#  include "logging_mosq.h"
-#  include "memory_mosq.h"
-#  include "mqtt_protocol.h"
-#  include "net_mosq.h"
-#  include "time_mosq.h"
-#  include "util_mosq.h"
-#else
+#ifdef WITH_QUIC
 #  include "msquic_mosq.h"
-#  include "net_mosq.h"
 #endif
 
-#ifndef WITH_QUIC
-#  ifdef WITH_TLS
+#include "logging_mosq.h"
+#include "memory_mosq.h"
+#include "mqtt_protocol.h"
+#include "net_mosq.h"
+#include "time_mosq.h"
+#include "util_mosq.h"
+
+#ifdef WITH_TLS
 int tls_ex_index_mosq = -1;
 UI_METHOD *_ui_method = NULL;
 
@@ -135,17 +134,17 @@ UI_METHOD *net__get_ui_method(void)
 	return _ui_method;
 }
 
-#  endif
 #endif
 
 int net__init(void)
 {
 #ifdef WITH_QUIC
 	int rc = msquic_init();
-	if (rc) {
+	if(rc){
 		return rc;
 	}
-#else
+
+#endif
 #ifdef WIN32
 	WSADATA wsaData;
 	if(WSAStartup(MAKEWORD(2,2), &wsaData) != 0){
@@ -157,15 +156,13 @@ int net__init(void)
 	ares_library_init(ARES_LIB_INIT_ALL);
 #endif
 
-#endif
 	return MOSQ_ERR_SUCCESS;
 }
 
 void net__cleanup(void)
 {
-#ifndef WITH_QUIC
-#  ifdef WITH_TLS
-#    if OPENSSL_VERSION_NUMBER < 0x10100000L
+#ifdef WITH_TLS
+#  if OPENSSL_VERSION_NUMBER < 0x10100000L
 	CRYPTO_cleanup_all_ex_data();
 	ERR_free_strings();
 	ERR_remove_thread_state(NULL);
@@ -175,26 +172,24 @@ void net__cleanup(void)
 	ENGINE_cleanup();
 #    endif
 	is_tls_initialized = false;
-#    endif
+#  endif
 
 	CONF_modules_unload(1);
 	cleanup_ui_method();
-#  endif
+#endif
 
-#  ifdef WITH_SRV
+#ifdef WITH_SRV
 	ares_library_cleanup();
-#  endif
+#endif
 
-#  ifdef WIN32
+#ifdef WIN32
 	WSACleanup();
-#  endif
-#else
+#endif
+
+#ifdef WITH_QUIC
 	msquic_cleanup();
 #endif
 }
-
-
-#ifndef WITH_QUIC
 
 #ifdef WITH_TLS
 void net__init_tls(void)
@@ -226,7 +221,8 @@ void net__init_tls(void)
  * Returns 1 on failure (context is NULL)
  * Returns 0 on success.
  */
-static int net__socket_close(struct mosquitto *mosq)
+
+int net__socket_close(struct mosquitto *mosq)
 {
 	int rc = 0;
 #ifdef WITH_BROKER
@@ -930,7 +926,7 @@ int net__socket_connect_step3(struct mosquitto *mosq, const char *host)
 }
 
 /* Create a socket and connect it to 'ip' on port 'port'.  */
-static int net__socket_connect(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address, bool blocking)
+int net__socket_connect(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address, bool blocking)
 {
 	int rc, rc2;
 
@@ -1050,94 +1046,6 @@ ssize_t net__write(struct mosquitto *mosq, const void *buf, size_t count)
 }
 
 
-#ifndef WITH_BROKER
-void *mosquitto_ssl_get(struct mosquitto *mosq)
-{
-#ifdef WITH_TLS
-	return mosq->ssl;
-#else
-	UNUSED(mosq);
-
-	return NULL;
-#endif
-}
-#endif
-
-#else
-int net__init_quic_client(struct mosquitto *mosq)
-{
-	if(!mosq) return MOSQ_ERR_INVAL;
-
-	return msquic_init_client(mosq);
-}
-
-int net__write(const struct mosq_quic_stream *stream, const void *buf, uint32_t count, void* client_context)
-{
-	if(count == 0) return MOSQ_ERR_SUCCESS;
-	return msquic_send(stream, buf, count, client_context);
-}
-
-void net__wakeup_loop(struct mosquitto *mosq, enum mosq_err_t rc)
-{
-	if(!mosq) return;
-
-    signed char signal_byte = (signed char)rc;
-
-    if(mosq->sockpairW != INVALID_SOCKET){
-#ifndef WIN32
-        if(write(mosq->sockpairW, &signal_byte, 1) < 0){
-           
-        }
-#else
-        if(send(mosq->sockpairW, &signal_byte, 1, 0) == SOCKET_ERROR){
-        }
-#endif
-    }
-}
-
-static int net__quic_connect(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address)
-{
-	if(!mosq || !host || port == 0) return MOSQ_ERR_INVAL;
-
-	return msquic_start_connection(&mosq->quic_connection, host, port, bind_address);
-}
-
-static int net__quic_close(struct mosquitto *mosq)
-{
-	assert(mosq);
-	return msquic_shutdown_connection(&mosq->quic_connection);
-}
-#endif
-
-int net__start_connection(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address, bool blocking)
-{
-#ifndef WITH_QUIC
-	return net__socket_connect(mosq, host, port, bind_address, blocking);
-#else
-	UNUSED(blocking);
-	return net__quic_connect(mosq, host, port, bind_address);
-#endif
-}
-
-int net__shutdown_connection(struct mosquitto *mosq)
-{
-#ifndef WITH_QUIC
-	return net__socket_close(mosq);
-#else
-	return net__quic_close(mosq);
-#endif
-}
-
-bool net__connection_valid(struct mosquitto *mosq)
-{
-    if (!mosq) return false;
-#ifndef WITH_QUIC
-	return (mosq->sock != INVALID_SOCKET);
-#else
-	return (mosq->quic_connection.handle != NULL);
-#endif
-}
-
 int net__socket_nonblock(mosq_sock_t *sock)
 {
 #ifndef WIN32
@@ -1165,6 +1073,7 @@ int net__socket_nonblock(mosq_sock_t *sock)
 #endif
 	return MOSQ_ERR_SUCCESS;
 }
+
 
 #ifndef WITH_BROKER
 int net__socketpair(mosq_sock_t *pairR, mosq_sock_t *pairW)
@@ -1296,3 +1205,108 @@ int net__socketpair(mosq_sock_t *pairR, mosq_sock_t *pairW)
 #endif
 }
 #endif
+
+#ifndef WITH_BROKER
+void *mosquitto_ssl_get(struct mosquitto *mosq)
+{
+#ifdef WITH_TLS
+	return mosq->ssl;
+#else
+	UNUSED(mosq);
+
+	return NULL;
+#endif
+}
+#endif
+
+#ifdef WITH_QUIC
+int net__quic_connect_init(struct mosquitto *mosq)
+{
+	if(!mosq) return MOSQ_ERR_INVAL;
+
+	return msquic_init_client(mosq);
+}
+
+int net__quic_connect(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address)
+{
+	if(!mosq || !host || port == 0) return MOSQ_ERR_INVAL;
+
+	return msquic_start_connection(&mosq->quic_connection, host, port, bind_address);
+}
+
+int net__quic_shutdown(struct mosquitto *mosq)
+{
+	assert(mosq);
+	return msquic_shutdown_connection(&mosq->quic_connection);
+}
+
+int net__quic_stream_send(const struct mosq_quic_stream *stream, const void *buf, uint32_t count, void* client_context)
+{
+	if(count == 0) return MOSQ_ERR_SUCCESS;
+	return msquic_send(stream, buf, count, client_context);
+}
+
+void net__wakeup_loop(struct mosquitto *mosq, enum mosq_err_t rc)
+{
+#ifndef WITH_BROKER
+	if(!mosq) return;
+
+    signed char signal_byte = (signed char)rc;
+
+    if(mosq->sockpairW != INVALID_SOCKET){
+#  ifndef WIN32
+        if(write(mosq->sockpairW, &signal_byte, 1) < 0){
+           
+        }
+#  else
+        if(send(mosq->sockpairW, &signal_byte, 1, 0) == SOCKET_ERROR){
+        }
+#  endif
+    }
+#else
+	UNUSED(mosq);
+	UNUSED(rc);
+#endif
+}
+#endif
+
+bool net__is_connected(struct mosquitto *mosq)
+{
+    if(!mosq) {
+        return false;
+    }
+    switch(mosq->transport) {
+    case mosq_t_tcp:
+        return (mosq->sock != INVALID_SOCKET);
+#ifdef WITH_QUIC
+    case mosq_t_quic:
+        return (mosq->quic_connection.handle != NULL);
+#endif
+    default:
+        return false;
+    }
+}
+
+int net__connect(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address, bool blocking)
+{
+	if(!mosq || !host || port == 0) return MOSQ_ERR_INVAL;
+
+#ifdef WITH_QUIC
+	if(mosq->transport == mosq_t_quic){
+		UNUSED(blocking);
+		return net__quic_connect(mosq, host, port, bind_address);
+	}
+#endif
+	return net__socket_connect(mosq, host, port, bind_address, blocking);
+}
+
+int net__disconnect(struct mosquitto *mosq)
+{
+	if(!mosq) return MOSQ_ERR_INVAL;
+#ifdef WITH_QUIC
+	if(mosq->transport == mosq_t_quic){
+		return net__quic_shutdown(mosq);
+	}
+#endif
+	return net__socket_close(mosq);
+}

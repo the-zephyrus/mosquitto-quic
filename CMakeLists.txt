@@ -37,6 +37,7 @@ if (WITH_QUIC)
 	set(QUIC_ENABLE_LOGGING OFF CACHE BOOL "Enable MsQuic logging" FORCE)
     set(QUIC_BUILD_SHARED OFF CACHE BOOL "Builds MsQuic as a static library" FORCE)
 	add_subdirectory(quic/msquic)
+	add_compile_options(-Wno-format-nonliteral)
 endif()
 
 option(WITH_BUNDLED_DEPS "Build with bundled dependencies?" ON)

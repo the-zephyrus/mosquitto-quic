@@ -15,14 +15,15 @@ SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
 Contributors:
    Roger Light - initial implementation and documentation.
 */
-#ifndef WITH_QUIC
 
 #include "config.h"
 
 #ifndef WITH_EPOLL
 
 #ifndef WIN32
-#  define _GNU_SOURCE
+#  ifndef _GNU_SOURCE
+#    define _GNU_SOURCE
+#  endif
 #endif
 
 #include <assert.h>
@@ -348,7 +349,5 @@ static void loop_handle_reads_writes(void)
 	}
 }
 
-
-#endif
 
 #endif

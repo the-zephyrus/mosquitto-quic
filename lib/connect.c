@@ -66,6 +66,13 @@ static int mosquitto__connect_init(struct mosquitto *mosq, const char *host, int
 		}
 	}
 
+#ifdef WITH_QUIC
+	if(mosq->transport == mosq_t_quic){
+		rc = net__quic_connect_init(mosq);
+		if(rc) return rc;
+	}
+#endif
+
 	mosquitto__free(mosq->host);
 	mosq->host = mosquitto__strdup(host);
 	if(!mosq->host) return MOSQ_ERR_NOMEM;
@@ -76,11 +83,6 @@ static int mosquitto__connect_init(struct mosquitto *mosq, const char *host, int
 	mosq->msgs_out.inflight_quota = mosq->msgs_out.inflight_maximum;
 	mosq->retain_available = 1;
 	mosquitto__set_request_disconnect(mosq, false);
-
-	rc = net__init_quic_client(mosq);
-	if(rc){
-		return rc;
-	}
 
 	return MOSQ_ERR_SUCCESS;
 }
@@ -195,27 +197,22 @@ static int mosquitto__reconnect(struct mosquitto *mosq, bool blocking)
 
 	message__reconnect_reset(mosq, false);
 
-	if(net__connection_valid(mosq)){
-		net__shutdown_connection(mosq);
+	if(net__is_connected(mosq)){
+		net__disconnect(mosq);
 	}
 
 #ifdef WITH_SOCKS
 	if(mosq->socks5_host){
-		rc = net__start_connection(mosq, mosq->socks5_host, mosq->socks5_port, mosq->bind_address, blocking);
+		rc = net__connect(mosq, mosq->socks5_host, mosq->socks5_port, mosq->bind_address, blocking);
 	}else
 #else
 	{
-#ifdef WITH_QUIC
-		mosquitto__set_state(mosq, mosq_cs_connect_pending);
-#endif
-		rc = net__start_connection(mosq, mosq->host, mosq->port, mosq->bind_address, blocking);
+		rc = net__connect(mosq, mosq->host, mosq->port, mosq->bind_address, blocking);
 	}
 #endif
 
 	if(rc > 0){
-#ifndef WITH_QUIC
 		mosquitto__set_state(mosq, mosq_cs_connect_pending);
-#endif
 		return rc;
 	}
 
@@ -226,13 +223,19 @@ static int mosquitto__reconnect(struct mosquitto *mosq, bool blocking)
 	}else
 #endif
 	{
-#ifndef WITH_QUIC
-		mosquitto__set_state(mosq, mosq_cs_connected);
+#ifdef WITH_QUIC
+		if(mosq->transport == mosq_t_quic){
+			mosquitto__set_state(mosq, mosq_cs_connect_pending);
+		}else
 #endif
+		{
+			mosquitto__set_state(mosq, mosq_cs_connected);
+		}
+
 		rc = send__connect(mosq, mosq->keepalive, mosq->clean_start, outgoing_properties);
 		if(rc){
 			packet__cleanup_all(mosq);
-			net__shutdown_connection(mosq);
+			net__disconnect(mosq);
 			mosquitto__set_state(mosq, mosq_cs_new);
 		}
 		return rc;
@@ -270,7 +273,7 @@ int mosquitto_disconnect_v5(struct mosquitto *mosq, int reason_code, const mosqu
 	mosquitto__set_state(mosq, mosq_cs_disconnected);
 	mosquitto__set_request_disconnect(mosq, true);
 
-	if(!net__connection_valid(mosq)){
+	if(!net__is_connected(mosq)){
 		return MOSQ_ERR_NO_CONN;
 	}else{
 		return send__disconnect(mosq, (uint8_t)reason_code, outgoing_properties);
@@ -282,7 +285,7 @@ void do_client_disconnect(struct mosquitto *mosq, int reason_code, const mosquit
 {
 	mosquitto__set_state(mosq, mosq_cs_disconnected);
 
-	net__shutdown_connection(mosq);
+	net__disconnect(mosq);
 
 	/* Free data and reset values */
 	pthread_mutex_lock(&mosq->out_packet_mutex);

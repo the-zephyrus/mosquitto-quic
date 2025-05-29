@@ -1,6 +1,8 @@
 #ifndef MSQUIC_MOSQ_HELPER_H
 #define MSQUIC_MOSQ_HELPER_H
 
+#ifdef WITH_QUIC
+
 #include "msquic.h"
 
 const char* 
@@ -22,5 +24,7 @@ convert_arg_to_address(
     _In_ uint16_t Port,
     _Out_ QUIC_ADDR* Address
     );
+
+#endif
 
 #endif
